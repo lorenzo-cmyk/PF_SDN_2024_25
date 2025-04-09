@@ -143,7 +143,7 @@ def find_switch_by_host_mac(app, mac):
     Finds the switch that has the host with the specified MAC address connected to it.
     :param app: The Ryu application instance.
     :param mac: The MAC address of the host to be found.
-    :return: The switch that has the host connected to it and the port number of the host.
+    :return: The switch ID that has the host connected to it and the port number of the host.
     """
     found_host = next((host for host in get_all_host(app) if host.mac == mac), None)
     return (
@@ -173,6 +173,29 @@ def find_next_hop_port(app, src_switch, dst_switch):
     first_link = model[path[0]][path[1]]
     # Return the port number of the first link.
     return first_link["port"]
+
+
+def find_output_port(app, src_switch, dst_mac):
+    """
+    Finds the output port to which the packet should be sent based on the destination MAC address.
+    :param app: The Ryu application instance.
+    :param src_switch: The source switch.
+    :param dst_mac: The destination MAC address.
+    :return: The output port number.
+    """
+    # Find the switch that has the host with the specified MAC address connected to it.
+    (dst_dpid, dst_port) = find_switch_by_host_mac(app, dst_mac)
+
+    # If the host is not found, return None.
+    if dst_dpid is None:
+        return None
+
+    # If the host is directly connected to the source switch, return the port number of the host.
+    if dst_dpid == src_switch.id:
+        return dst_port
+
+    # Otherwise, find the next hop port in the path to the destination switch.
+    return find_next_hop_port(app, src_switch, dst_dpid)
 
 
 class HopByHopSwitch(app_manager.RyuApp):
@@ -206,25 +229,10 @@ class HopByHopSwitch(app_manager.RyuApp):
         if eth.ethertype != ether_types.ETH_TYPE_IP:
             return
 
-        destination_mac = eth.dst
-
-        # trova switch destinazione
-        (dst_dpid, dst_port) = find_switch_by_host_mac(self, destination_mac)
-
-        # host non trovato
-        if dst_dpid is None:
-            # print "DP: ", datapath.id, "Host not found: ", pkt_ip.dst
+        output_port = find_output_port(self, datapath, eth.dst)
+        # se non c'è nessun host con quell'indirizzo MAC ignora il pacchetto
+        if output_port is None:
             return
 
-        if dst_dpid == datapath.id:
-            # da usare se l'host e' direttamente collegato
-            output_port = dst_port
-        else:
-            # host non direttamente collegato
-            output_port = find_next_hop_port(self, datapath.id, dst_dpid)
-
-        # print "DP: ", datapath.id, "Host: ", pkt_ip.dst, "Port: ", output_port
-
-        # inoltra il pacchetto corrente
         out = flowmod_forward_packet(datapath, output_port, msg)
         datapath.send_msg(out)
