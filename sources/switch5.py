@@ -134,6 +134,22 @@ def flowmod_forward_packet(switch, out_port, pkt):
     return pkt_out
 
 
+#### Methods used to handle the network topology ####
+
+
+def find_switch_by_host_mac(app, mac):
+    """
+    Finds the switch that has the host with the specified MAC address connected to it.
+    :param app: The Ryu application instance.
+    :param mac: The MAC address of the host to be found.
+    :return: The switch that has the host connected to it and the port number of the host.
+    """
+    found_host = next((host for host in get_all_host(app) if host.mac == mac), None)
+    return (
+        (found_host.port.dpid, found_host.port.port_no) if found_host else (None, None)
+    )
+
+
 class HopByHopSwitch(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
@@ -143,12 +159,6 @@ class HopByHopSwitch(app_manager.RyuApp):
         datapath = ev.msg.datapath
         datapath.send_msg(flowmod_default_configuration(datapath))
 
-    # trova switch destinazione e porta dello switch
-    def find_destination_switch(self,destination_mac):
-        for host in get_all_host(self):
-            if host.mac == destination_mac:
-                return (host.port.dpid, host.port.port_no)
-        return (None,None)
 
     def find_next_hop_to_destination(self,source_id,destination_id):
         net = nx.DiGraph()
@@ -193,7 +203,7 @@ class HopByHopSwitch(app_manager.RyuApp):
         destination_mac = eth.dst
 
         # trova switch destinazione
-        (dst_dpid, dst_port) = self.find_destination_switch(destination_mac)
+        (dst_dpid, dst_port) = find_switch_by_host_mac(self, destination_mac)
 
         # host non trovato
         if dst_dpid is None:
