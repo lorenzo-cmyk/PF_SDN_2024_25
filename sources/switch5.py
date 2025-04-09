@@ -106,6 +106,34 @@ def flowmod_arp_proxy(app, arp_req):
     return arp_reply
 
 
+def flowmod_forward_packet(switch, out_port, pkt):
+    """
+    Generates a FlowMod message to forward the packet to the specified output port.
+    :param switch: The switch to which the FlowMod message will be sent.
+    :param out_port: The output port to which the packet will be forwarded.
+    :param pkt: The packet to be forwarded.
+    :return: The FlowMod message to be sent to the switch.
+    """
+    # Retrive the OpenFlow parser object from the switch.
+    ofparser = switch.ofproto_parser
+
+    # Build the FlowMod message to instruct the switch to forward the packet to the specified output port.
+    # Actions: just forward the packet to said port.
+    actions = [ofparser.OFPActionOutput(out_port)]
+    # PacketOut: pack everything in a PacketOut message to be sent to the switch.
+    pkt_out = ofparser.OFPPacketOut(
+        datapath=switch,
+        buffer_id=pkt.buffer_id,
+        # Spoof the port to make it look like the packet is coming from the switch.
+        # This is needed because the packet is coming from the controller and not from the switch.
+        in_port=pkt.match["in_port"],
+        actions=actions,
+        data=pkt.data,
+    )
+
+    return pkt_out
+
+
 class HopByHopSwitch(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
@@ -182,12 +210,5 @@ class HopByHopSwitch(app_manager.RyuApp):
         # print "DP: ", datapath.id, "Host: ", pkt_ip.dst, "Port: ", output_port
 
         # inoltra il pacchetto corrente
-        actions = [ parser.OFPActionOutput(output_port) ]
-        out = parser.OFPPacketOut(
-            datapath=datapath,
-            buffer_id=msg.buffer_id,
-            in_port=in_port,
-            actions=actions,
-            data=msg.data
-        )
+        out = flowmod_forward_packet(datapath, output_port, msg)
         datapath.send_msg(out)
