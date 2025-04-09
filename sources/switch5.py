@@ -201,38 +201,49 @@ def find_output_port(app, src_switch, dst_mac):
 class HopByHopSwitch(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
-    # tutti i pacchetti al controllore
+    # Handler for the "Switch Features" event.
+    # This event is triggered when a switch connects to the controller.
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
-    def switch_features_handler(self, ev):
-        datapath = ev.msg.datapath
-        datapath.send_msg(flowmod_default_configuration(datapath))
+    def handle_switch_features(self, ev):
+        # Retrive the switch object from the event. Send to it the default configuration.
+        switch = ev.msg.datapath
+        switch.send_msg(flowmod_default_configuration(switch))
 
+    # Handler for the "Packet In" event.
+    # This event is triggered when a packet is received by the switch and sent to the controller.
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
-    def _packet_in_handler(self, ev):
+    def handle_packet_in(self, ev):
+        # Retrive the message and the switch object from the event.
+        ofmessage = ev.msg
+        switch = ofmessage.datapath
 
-        msg = ev.msg
-        datapath = msg.datapath
+        # Extract the packet from the message. Parse it to get the Ethernet header.
+        pkt_in = packet.Packet(ofmessage.data)
+        eth_in = pkt_in.get_protocol(ethernet.ethernet)
 
-        pkt = packet.Packet(msg.data)
-        eth = pkt.get_protocol(ethernet.ethernet)
+        ### L2 Manipulation ###
 
-        # se ARP esegui proxy arp
-        if eth.ethertype == ether_types.ETH_TYPE_ARP:
-            out = flowmod_arp_proxy(self, msg)
-            if out is not None:
-                # invia il pacchetto ARP reply al switch
-                datapath.send_msg(out)
-
+        # If the packet is an ARP request act as a proxy and reply to it.
+        if eth_in.ethertype == ether_types.ETH_TYPE_ARP:
+            fm_arp_reply = flowmod_arp_proxy(self, ofmessage)
+            if fm_arp_reply is not None:
+                switch.send_msg(fm_arp_reply)
             return
 
-        # ignora pacchetti non IPv4 (es. ARP, LLDP)
-        if eth.ethertype != ether_types.ETH_TYPE_IP:
+        # Drop spurious broadcast traffic.
+        if eth_in.dst == "ff:ff:ff:ff:ff:ff":
             return
 
-        output_port = find_output_port(self, datapath, eth.dst)
-        # se non c'è nessun host con quell'indirizzo MAC ignora il pacchetto
+        ### L3 Manipulation ###
+
+        # If the packet is not an IPv4 packet ignore it.
+        if eth_in.ethertype != ether_types.ETH_TYPE_IP:
+            return
+
+        # If the packet is an IPv4 packet, find the output port to which the packet should be sent based on the destination MAC address.
+        output_port = find_output_port(self, switch, eth_in.dst)
         if output_port is None:
             return
 
-        out = flowmod_forward_packet(datapath, output_port, msg)
-        datapath.send_msg(out)
+        fm_pkt_forward = flowmod_forward_packet(switch, output_port, ofmessage)
+        switch.send_msg(fm_pkt_forward)
