@@ -1,10 +1,3 @@
-# Implementazione openflow di hop-by-hop routing
-# usando la mappa della rete trovata con topology discovery
-#
-# Si richiede l'uso del topology discovery
-# ryu-manager --observe-links
-#
-
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import set_ev_cls, CONFIG_DISPATCHER, MAIN_DISPATCHER
@@ -113,27 +106,6 @@ class HopByHopSwitch(app_manager.RyuApp):
             data=msg.data
         )
         datapath.send_msg(out)
-
-        # aggiungi la regola
-        match = parser.OFPMatch(
-            eth_dst=destination_mac
-            )
-        inst = [
-            parser.OFPInstructionActions(
-                ofproto.OFPIT_APPLY_ACTIONS,
-                [ parser.OFPActionOutput(output_port) ]
-            )
-        ]
-        mod = parser.OFPFlowMod(
-            datapath=datapath,
-            priority=10,
-            match=match,
-            instructions=inst,
-            buffer_id=msg.buffer_id
-        )
-        datapath.send_msg(mod)
-
-        return
 
     def proxy_arp(self, msg):
         datapath = msg.datapath
