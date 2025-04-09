@@ -2,12 +2,12 @@ from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import set_ev_cls, CONFIG_DISPATCHER, MAIN_DISPATCHER
 from ryu.ofproto import ofproto_v1_3
-from ryu.topology import event, switches
-from ryu.topology.api import get_all_switch, get_all_link, get_all_host
+from ryu.topology.api import get_all_link, get_all_host
 from ryu.lib.packet import packet, ethernet, ether_types, arp
 import networkx as nx
 
 #### Methods used to generate FlowMod messages ####
+
 
 def flowmod_default_configuration(switch):
     """
@@ -41,6 +41,7 @@ def flowmod_default_configuration(switch):
     )
 
     return rule
+
 
 def flowmod_arp_proxy(app, arp_req):
     """
@@ -159,30 +160,22 @@ class HopByHopSwitch(app_manager.RyuApp):
         datapath = ev.msg.datapath
         datapath.send_msg(flowmod_default_configuration(datapath))
 
-
-    def find_next_hop_to_destination(self,source_id,destination_id):
+    def find_next_hop_to_destination(self, source_id, destination_id):
         net = nx.DiGraph()
         for link in get_all_link(self):
             net.add_edge(link.src.dpid, link.dst.dpid, port=link.src.port_no)
 
-        path = nx.shortest_path(
-            net,
-            source_id,
-            destination_id
-        )
+        path = nx.shortest_path(net, source_id, destination_id)
 
-        first_link = net[ path[0] ][ path[1] ]
+        first_link = net[path[0]][path[1]]
 
-        return first_link['port']
+        return first_link["port"]
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
 
         msg = ev.msg
         datapath = msg.datapath
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
-        in_port = msg.match['in_port']
 
         pkt = packet.Packet(msg.data)
         eth = pkt.get_protocol(ethernet.ethernet)
@@ -212,10 +205,10 @@ class HopByHopSwitch(app_manager.RyuApp):
 
         if dst_dpid == datapath.id:
             # da usare se l'host e' direttamente collegato
-            output_port = dst_port    
+            output_port = dst_port
         else:
             # host non direttamente collegato
-            output_port = self.find_next_hop_to_destination(datapath.id,dst_dpid)
+            output_port = self.find_next_hop_to_destination(datapath.id, dst_dpid)
 
         # print "DP: ", datapath.id, "Host: ", pkt_ip.dst, "Port: ", output_port
 
