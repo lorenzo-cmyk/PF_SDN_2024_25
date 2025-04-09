@@ -66,13 +66,10 @@ def flowmod_arp_proxy(app, arp_req):
 
     # Finds the MAC address of the host that has the IP address specified in the ARP request.
     # If the host is not found, the function returns without doing anything.
-    # TODO: rewrite it all using a lambda function!
-    destination_host_mac = None
-    for host in get_all_host(app):
-        if arp_in.dst_ip in host.ipv4:
-            destination_host_mac = host.mac
-            break
-    if destination_host_mac is None:
+    target_mac_address = next(
+        (host.mac for host in get_all_host(app) if arp_in.dst_ip in host.ipv4), None
+    )
+    if target_mac_address is None:
         return None
 
     # Starts building the ARP reply packet.
@@ -80,14 +77,14 @@ def flowmod_arp_proxy(app, arp_req):
     # External Ethernet header: the destination MAC address is the source MAC address of the ARP request, the source MAC address is the MAC address of the host that has the IP address specified in the ARP request.
     eth_out = ethernet.ethernet(
         dst=eth_in.src,
-        src=destination_host_mac,
+        src=target_mac_address,
         # Ethernet type: ARP
         ethertype=ether_types.ETH_TYPE_ARP,
     )
     # ARP header: the opcode is ARP_REPLY, the source MAC address is the MAC address of the host that has the IP address specified in the ARP request, the source IP address is the IP address specified in the ARP request, the destination MAC address is the source MAC address of the ARP request, and the destination IP address is the IP address specified in the ARP request.
     arp_out = arp.arp(
         opcode=arp.ARP_REPLY,
-        src_mac=destination_host_mac,
+        src_mac=target_mac_address,
         src_ip=arp_in.dst_ip,
         dst_mac=arp_in.src_mac,
         dst_ip=arp_in.src_ip,
