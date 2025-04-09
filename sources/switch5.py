@@ -7,6 +7,41 @@ from ryu.topology.api import get_all_switch, get_all_link, get_all_host
 from ryu.lib.packet import packet, ethernet, ether_types, arp
 import networkx as nx
 
+#### Methods used to generate FlowMod messages ####
+
+def flowmod_default_configuration(switch):
+    """
+    Generates a FlowMod message to configure the switch to send all packets to the controller.
+    :param switch: The switch to be configured.
+    :return: The FlowMod message to be sent to the switch.
+    """
+    # Retrieve the OpenFlow protocol object and relative parser from the switch.
+    ofprotocol = switch.ofproto
+    ofparser = switch.ofproto_parser
+
+    # Default configuration for the switch: sends everything to the controller.
+    # Instructions: for each packet, apply the action: send everything to the controller using the OFPP_CONTROLLER port.
+    instructions = [
+        ofparser.OFPInstructionActions(
+            ofprotocol.OFPIT_APPLY_ACTIONS,
+            [
+                ofparser.OFPActionOutput(
+                    ofprotocol.OFPP_CONTROLLER, ofprotocol.OFPCML_NO_BUFFER
+                )
+            ],
+        )
+    ]
+    # Rule: match everything and apply the instructions. Keep the priority low to avoid conflicts with other rules.
+    rule = ofparser.OFPFlowMod(
+        datapath=switch,
+        priority=0,
+        # Match: match everything (wildcard).
+        match=ofparser.OFPMatch(),
+        instructions=instructions,
+    )
+
+    return rule
+
 class HopByHopSwitch(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
@@ -14,25 +49,7 @@ class HopByHopSwitch(app_manager.RyuApp):
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
         datapath = ev.msg.datapath
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
-
-        inst = [
-            parser.OFPInstructionActions(
-                ofproto.OFPIT_APPLY_ACTIONS,
-                [
-                    parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
-                                           ofproto.OFPCML_NO_BUFFER)
-                ]
-            )
-        ]
-        mod = parser.OFPFlowMod(
-            datapath=datapath,
-            priority=0,
-            match = parser.OFPMatch(),
-            instructions=inst
-        )
-        datapath.send_msg(mod)
+        datapath.send_msg(flowmod_default_configuration(datapath))
 
     # trova switch destinazione e porta dello switch
     def find_destination_switch(self,destination_mac):
