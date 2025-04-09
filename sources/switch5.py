@@ -205,28 +205,30 @@ class NetworkTopology:
         return self.__find_next_hop_port(src_switch.id, dst_switch_id)
 
 
-class HopByHopSwitch(app_manager.RyuApp):
+class BabyElephantWalk(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
-        super(HopByHopSwitch, self).__init__(*args, **kwargs)
+        super(BabyElephantWalk, self).__init__(*args, **kwargs)
         # Initialize the MessageFactory with the Ryu application instance.
         self.message_factory = MessageFactory(self)
         # Initialize the NetworkTopology with the Ryu application instance.
         self.network_topology = NetworkTopology(self)
 
-    # Handler for the "Switch Features" event.
-    # This event is triggered when a switch connects to the controller.
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def handle_switch_features(self, ev):
+        """Handler for the "Switch Features" event.
+        This event is triggered when a switch connects to the controller.
+        """
         # Retrive the switch object from the event. Send to it the default configuration.
         switch = ev.msg.datapath
         switch.send_msg(self.message_factory.default_configuration(switch))
 
-    # Handler for the "Packet In" event.
-    # This event is triggered when a packet is received by the switch and sent to the controller.
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def handle_packet_in(self, ev):
+        """Handler for the "Packet In" event.
+        This event is triggered when a packet is received by the switch and sent to the controller.
+        """
         # Retrive the message and the switch object from the event.
         ofmessage = ev.msg
         switch = ofmessage.datapath
