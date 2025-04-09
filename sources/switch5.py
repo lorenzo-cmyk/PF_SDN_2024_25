@@ -138,25 +138,25 @@ def flowmod_forward_packet(switch, out_port, pkt):
 #### Methods used to handle the network topology ####
 
 
-def find_switch_by_host_mac(app, mac):
+def find_switch_by_host_mac(app, dst_mac):
     """
     Finds the switch that has the host with the specified MAC address connected to it.
     :param app: The Ryu application instance.
-    :param mac: The MAC address of the host to be found.
+    :param dst_mac: The MAC address of the host to be found.
     :return: The switch ID that has the host connected to it and the port number of the host.
     """
-    found_host = next((host for host in get_all_host(app) if host.mac == mac), None)
+    found_host = next((host for host in get_all_host(app) if host.mac == dst_mac), None)
     return (
         (found_host.port.dpid, found_host.port.port_no) if found_host else (None, None)
     )
 
 
-def find_next_hop_port(app, src_switch, dst_switch):
+def find_next_hop_port(app, src_switch_id, dst_switch_id):
     """
     Finds the port which connects the source switch to the next hop switch in the path to the destination switch.
     :param app: The Ryu application instance.
-    :param src_switch: The source switch.
-    :param dst_switch: The destination switch.
+    :param src_switch_id: The ID of the source switch.
+    :param dst_switch_id: The ID of the destination switch.
     :return: The port number of the next hop switch.
     """
     # Build the network model.
@@ -167,7 +167,7 @@ def find_next_hop_port(app, src_switch, dst_switch):
     ]
 
     # Find the shortest path between the source and destination switches.
-    path = nx.shortest_path(model, src_switch, dst_switch)
+    path = nx.shortest_path(model, src_switch_id, dst_switch_id)
 
     # Get the first link in the path.
     first_link = model[path[0]][path[1]]
@@ -179,23 +179,23 @@ def find_output_port(app, src_switch, dst_mac):
     """
     Finds the output port to which the packet should be sent based on the destination MAC address.
     :param app: The Ryu application instance.
-    :param src_switch: The source switch.
+    :param src_switch: The object representing the source switch.
     :param dst_mac: The destination MAC address.
     :return: The output port number.
     """
     # Find the switch that has the host with the specified MAC address connected to it.
-    (dst_dpid, dst_port) = find_switch_by_host_mac(app, dst_mac)
+    (dst_switch_id, dst_switch_port) = find_switch_by_host_mac(app, dst_mac)
 
     # If the host is not found, return None.
-    if dst_dpid is None:
+    if dst_switch_id is None:
         return None
 
     # If the host is directly connected to the source switch, return the port number of the host.
-    if dst_dpid == src_switch.id:
-        return dst_port
+    if dst_switch_id == src_switch.id:
+        return dst_switch_port
 
     # Otherwise, find the next hop port in the path to the destination switch.
-    return find_next_hop_port(app, src_switch, dst_dpid)
+    return find_next_hop_port(app, src_switch.id, dst_switch_id)
 
 
 class HopByHopSwitch(app_manager.RyuApp):
