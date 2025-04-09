@@ -6,133 +6,137 @@ from ryu.topology.api import get_all_link, get_all_host
 from ryu.lib.packet import packet, ethernet, ether_types, arp
 import networkx as nx
 
-#### Methods used to generate FlowMod messages ####
 
+class MessageFactory:
+    """Class used to generate FlowMod messages to be sent to the switches."""
 
-def flowmod_default_configuration(switch):
-    """
-    Generates a FlowMod message to configure the switch to send all packets to the controller.
-    :param switch: The switch to be configured.
-    :return: The FlowMod message to be sent to the switch.
-    """
-    # Retrieve the OpenFlow protocol object and relative parser from the switch.
-    ofprotocol = switch.ofproto
-    ofparser = switch.ofproto_parser
+    def __init__(self, app):
+        """Initializes the MessageFactory with the Ryu application instance."""
+        self.app = app
 
-    # Default configuration for the switch: sends everything to the controller.
-    # Instructions: for each packet, apply the action: send everything to the controller using the OFPP_CONTROLLER port.
-    instructions = [
-        ofparser.OFPInstructionActions(
-            ofprotocol.OFPIT_APPLY_ACTIONS,
-            [
-                ofparser.OFPActionOutput(
-                    ofprotocol.OFPP_CONTROLLER, ofprotocol.OFPCML_NO_BUFFER
-                )
-            ],
+    def default_configuration(self, switch):
+        """
+        Generates a FlowMod message to configure the switch to send all packets to the controller.
+        :param switch: The switch to be configured.
+        :return: The FlowMod message to be sent to the switch.
+        """
+        # Retrieve the OpenFlow protocol object and relative parser from the switch.
+        ofprotocol = switch.ofproto
+        ofparser = switch.ofproto_parser
+
+        # Default configuration for the switch: sends everything to the controller.
+        # Instructions: for each packet, apply the action: send everything to the controller using the OFPP_CONTROLLER port.
+        instructions = [
+            ofparser.OFPInstructionActions(
+                ofprotocol.OFPIT_APPLY_ACTIONS,
+                [
+                    ofparser.OFPActionOutput(
+                        ofprotocol.OFPP_CONTROLLER, ofprotocol.OFPCML_NO_BUFFER
+                    )
+                ],
+            )
+        ]
+        # Rule: match everything and apply the instructions. Keep the priority low to avoid conflicts with other rules.
+        rule = ofparser.OFPFlowMod(
+            datapath=switch,
+            priority=0,
+            # Match: match everything (wildcard).
+            match=ofparser.OFPMatch(),
+            instructions=instructions,
         )
-    ]
-    # Rule: match everything and apply the instructions. Keep the priority low to avoid conflicts with other rules.
-    rule = ofparser.OFPFlowMod(
-        datapath=switch,
-        priority=0,
-        # Match: match everything (wildcard).
-        match=ofparser.OFPMatch(),
-        instructions=instructions,
-    )
 
-    return rule
+        return rule
 
+    def arp_proxy(self, arp_req):
+        """
+        Generates a FlowMod message to reply to an ARP request with the MAC address of the host that has the IP address specified in the ARP request.
+        :param app: The Ryu application instance.
+        :param arp_req: The ARP request packet received by the controller.
+        :return: The FlowMod message to be sent to the switch.
+        """
+        # Retrieve the OpenFlow protocol object and relative parser from the switch.
+        # The switch itself is extracted from the ARP request.
+        switch = arp_req.datapath
+        ofprotocol = switch.ofproto
+        ofparser = switch.ofproto_parser
 
-def flowmod_arp_proxy(app, arp_req):
-    """
-    Generates a FlowMod message to reply to an ARP request with the MAC address of the host that has the IP address specified in the ARP request.
-    :param app: The Ryu application instance.
-    :param arp_req: The ARP request packet received by the controller.
-    :return: The FlowMod message to be sent to the switch.
-    """
-    # Retrieve the OpenFlow protocol object and relative parser from the switch.
-    # The switch itself is extracted from the ARP request.
-    switch = arp_req.datapath
-    ofprotocol = switch.ofproto
-    ofparser = switch.ofproto_parser
+        # Parse the ARP request: starts from the raw byte stream received by the controller and extracts Ethernet and ARP informations.
+        raw_in = packet.Packet(arp_req.data)
+        eth_in = raw_in.get_protocol(ethernet.ethernet)
+        arp_in = raw_in.get_protocol(arp.arp)
 
-    # Parse the ARP request: starts from the raw byte stream received by the controller and extracts Ethernet and ARP informations.
-    raw_in = packet.Packet(arp_req.data)
-    eth_in = raw_in.get_protocol(ethernet.ethernet)
-    arp_in = raw_in.get_protocol(arp.arp)
+        # Handle only ARP requests, ignore all other types of ARP packets.
+        if arp_in.opcode != arp.ARP_REQUEST:
+            return
 
-    # Handle only ARP requests, ignore all other types of ARP packets.
-    if arp_in.opcode != arp.ARP_REQUEST:
-        return
+        # Finds the MAC address of the host that has the IP address specified in the ARP request.
+        # If the host is not found, the function returns without doing anything.
+        target_mac_address = next(
+            (host.mac for host in get_all_host(self.app) if arp_in.dst_ip in host.ipv4),
+            None,
+        )
+        if target_mac_address is None:
+            return None
 
-    # Finds the MAC address of the host that has the IP address specified in the ARP request.
-    # If the host is not found, the function returns without doing anything.
-    target_mac_address = next(
-        (host.mac for host in get_all_host(app) if arp_in.dst_ip in host.ipv4), None
-    )
-    if target_mac_address is None:
-        return None
+        # Starts building the ARP reply packet.
+        raw_out = packet.Packet()
+        # External Ethernet header: the destination MAC address is the source MAC address of the ARP request, the source MAC address is the MAC address of the host that has the IP address specified in the ARP request.
+        eth_out = ethernet.ethernet(
+            dst=eth_in.src,
+            src=target_mac_address,
+            # Ethernet type: ARP
+            ethertype=ether_types.ETH_TYPE_ARP,
+        )
+        # ARP header: the opcode is ARP_REPLY, the source MAC address is the MAC address of the host that has the IP address specified in the ARP request, the source IP address is the IP address specified in the ARP request, the destination MAC address is the source MAC address of the ARP request, and the destination IP address is the IP address specified in the ARP request.
+        arp_out = arp.arp(
+            opcode=arp.ARP_REPLY,
+            src_mac=target_mac_address,
+            src_ip=arp_in.dst_ip,
+            dst_mac=arp_in.src_mac,
+            dst_ip=arp_in.src_ip,
+        )
+        raw_out.add_protocol(eth_out)
+        raw_out.add_protocol(arp_out)
+        raw_out.serialize()
 
-    # Starts building the ARP reply packet.
-    raw_out = packet.Packet()
-    # External Ethernet header: the destination MAC address is the source MAC address of the ARP request, the source MAC address is the MAC address of the host that has the IP address specified in the ARP request.
-    eth_out = ethernet.ethernet(
-        dst=eth_in.src,
-        src=target_mac_address,
-        # Ethernet type: ARP
-        ethertype=ether_types.ETH_TYPE_ARP,
-    )
-    # ARP header: the opcode is ARP_REPLY, the source MAC address is the MAC address of the host that has the IP address specified in the ARP request, the source IP address is the IP address specified in the ARP request, the destination MAC address is the source MAC address of the ARP request, and the destination IP address is the IP address specified in the ARP request.
-    arp_out = arp.arp(
-        opcode=arp.ARP_REPLY,
-        src_mac=target_mac_address,
-        src_ip=arp_in.dst_ip,
-        dst_mac=arp_in.src_mac,
-        dst_ip=arp_in.src_ip,
-    )
-    raw_out.add_protocol(eth_out)
-    raw_out.add_protocol(arp_out)
-    raw_out.serialize()
+        # Build the FlowMod message to inscruct the switch to send the ARP reply that we have just built.
+        arp_reply = ofparser.OFPPacketOut(
+            datapath=switch,
+            buffer_id=ofprotocol.OFP_NO_BUFFER,
+            in_port=ofprotocol.OFPP_CONTROLLER,
+            # The ARP reply is sent to the port from which the ARP request was received.
+            actions=[ofparser.OFPActionOutput(arp_req.match["in_port"])],
+            data=raw_out.data,
+        )
 
-    # Build the FlowMod message to inscruct the switch to send the ARP reply that we have just built.
-    arp_reply = ofparser.OFPPacketOut(
-        datapath=switch,
-        buffer_id=ofprotocol.OFP_NO_BUFFER,
-        in_port=ofprotocol.OFPP_CONTROLLER,
-        # The ARP reply is sent to the port from which the ARP request was received.
-        actions=[ofparser.OFPActionOutput(arp_req.match["in_port"])],
-        data=raw_out.data,
-    )
+        return arp_reply
 
-    return arp_reply
+    def forward_packet(self, switch, out_port, pkt):
+        """
+        Generates a FlowMod message to forward the packet to the specified output port.
+        :param switch: The switch to which the FlowMod message will be sent.
+        :param out_port: The output port to which the packet will be forwarded.
+        :param pkt: The packet to be forwarded.
+        :return: The FlowMod message to be sent to the switch.
+        """
+        # Retrive the OpenFlow parser object from the switch.
+        ofparser = switch.ofproto_parser
 
+        # Build the FlowMod message to instruct the switch to forward the packet to the specified output port.
+        # Actions: just forward the packet to said port.
+        actions = [ofparser.OFPActionOutput(out_port)]
+        # PacketOut: pack everything in a PacketOut message to be sent to the switch.
+        pkt_out = ofparser.OFPPacketOut(
+            datapath=switch,
+            buffer_id=pkt.buffer_id,
+            # Spoof the port to make it look like the packet is coming from the switch.
+            # This is needed because the packet is coming from the controller and not from the switch.
+            in_port=pkt.match["in_port"],
+            actions=actions,
+            data=pkt.data,
+        )
 
-def flowmod_forward_packet(switch, out_port, pkt):
-    """
-    Generates a FlowMod message to forward the packet to the specified output port.
-    :param switch: The switch to which the FlowMod message will be sent.
-    :param out_port: The output port to which the packet will be forwarded.
-    :param pkt: The packet to be forwarded.
-    :return: The FlowMod message to be sent to the switch.
-    """
-    # Retrive the OpenFlow parser object from the switch.
-    ofparser = switch.ofproto_parser
-
-    # Build the FlowMod message to instruct the switch to forward the packet to the specified output port.
-    # Actions: just forward the packet to said port.
-    actions = [ofparser.OFPActionOutput(out_port)]
-    # PacketOut: pack everything in a PacketOut message to be sent to the switch.
-    pkt_out = ofparser.OFPPacketOut(
-        datapath=switch,
-        buffer_id=pkt.buffer_id,
-        # Spoof the port to make it look like the packet is coming from the switch.
-        # This is needed because the packet is coming from the controller and not from the switch.
-        in_port=pkt.match["in_port"],
-        actions=actions,
-        data=pkt.data,
-    )
-
-    return pkt_out
+        return pkt_out
 
 
 #### Methods used to handle the network topology ####
@@ -201,13 +205,18 @@ def find_output_port(app, src_switch, dst_mac):
 class HopByHopSwitch(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
+    def __init__(self, *args, **kwargs):
+        super(HopByHopSwitch, self).__init__(*args, **kwargs)
+        # Initialize the MessageFactory with the Ryu application instance.
+        self.message_factory = MessageFactory(self)
+
     # Handler for the "Switch Features" event.
     # This event is triggered when a switch connects to the controller.
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def handle_switch_features(self, ev):
         # Retrive the switch object from the event. Send to it the default configuration.
         switch = ev.msg.datapath
-        switch.send_msg(flowmod_default_configuration(switch))
+        switch.send_msg(self.message_factory.default_configuration(switch))
 
     # Handler for the "Packet In" event.
     # This event is triggered when a packet is received by the switch and sent to the controller.
@@ -225,7 +234,7 @@ class HopByHopSwitch(app_manager.RyuApp):
 
         # If the packet is an ARP request act as a proxy and reply to it.
         if eth_in.ethertype == ether_types.ETH_TYPE_ARP:
-            fm_arp_reply = flowmod_arp_proxy(self, ofmessage)
+            fm_arp_reply = self.message_factory.arp_proxy(ofmessage)
             if fm_arp_reply is not None:
                 switch.send_msg(fm_arp_reply)
             return
@@ -245,5 +254,7 @@ class HopByHopSwitch(app_manager.RyuApp):
         if output_port is None:
             return
 
-        fm_pkt_forward = flowmod_forward_packet(switch, output_port, ofmessage)
+        fm_pkt_forward = self.message_factory.forward_packet(
+            switch, output_port, ofmessage
+        )
         switch.send_msg(fm_pkt_forward)
