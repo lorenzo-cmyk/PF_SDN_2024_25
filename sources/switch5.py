@@ -151,6 +151,30 @@ def find_switch_by_host_mac(app, mac):
     )
 
 
+def find_next_hop_port(app, src_switch, dst_switch):
+    """
+    Finds the port which connects the source switch to the next hop switch in the path to the destination switch.
+    :param app: The Ryu application instance.
+    :param src_switch: The source switch.
+    :param dst_switch: The destination switch.
+    :return: The port number of the next hop switch.
+    """
+    # Build the network model.
+    model = nx.DiGraph()
+    [
+        model.add_edge(link.src.dpid, link.dst.dpid, port=link.src.port_no)
+        for link in get_all_link(app)
+    ]
+
+    # Find the shortest path between the source and destination switches.
+    path = nx.shortest_path(model, src_switch, dst_switch)
+
+    # Get the first link in the path.
+    first_link = model[path[0]][path[1]]
+    # Return the port number of the first link.
+    return first_link["port"]
+
+
 class HopByHopSwitch(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
@@ -159,17 +183,6 @@ class HopByHopSwitch(app_manager.RyuApp):
     def switch_features_handler(self, ev):
         datapath = ev.msg.datapath
         datapath.send_msg(flowmod_default_configuration(datapath))
-
-    def find_next_hop_to_destination(self, source_id, destination_id):
-        net = nx.DiGraph()
-        for link in get_all_link(self):
-            net.add_edge(link.src.dpid, link.dst.dpid, port=link.src.port_no)
-
-        path = nx.shortest_path(net, source_id, destination_id)
-
-        first_link = net[path[0]][path[1]]
-
-        return first_link["port"]
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
@@ -208,7 +221,7 @@ class HopByHopSwitch(app_manager.RyuApp):
             output_port = dst_port
         else:
             # host non direttamente collegato
-            output_port = self.find_next_hop_to_destination(datapath.id, dst_dpid)
+            output_port = find_next_hop_port(self, datapath.id, dst_dpid)
 
         # print "DP: ", datapath.id, "Host: ", pkt_ip.dst, "Port: ", output_port
 
