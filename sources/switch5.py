@@ -139,67 +139,70 @@ class MessageFactory:
         return pkt_out
 
 
-#### Methods used to handle the network topology ####
+class NetworkTopology:
+    """Class used to represent the network topology."""
 
+    def __init__(self, app):
+        """Initializes the NetworkTopology with the Ryu application instance."""
+        self.app = app
 
-def find_switch_by_host_mac(app, dst_mac):
-    """
-    Finds the switch that has the host with the specified MAC address connected to it.
-    :param app: The Ryu application instance.
-    :param dst_mac: The MAC address of the host to be found.
-    :return: The switch ID that has the host connected to it and the port number of the host.
-    """
-    found_host = next((host for host in get_all_host(app) if host.mac == dst_mac), None)
-    return (
-        (found_host.port.dpid, found_host.port.port_no) if found_host else (None, None)
-    )
+    def __find_switch_by_host_mac(self, dst_mac):
+        """
+        Finds the switch that has the host with the specified MAC address connected to it.
+        :param dst_mac: The MAC address of the host to be found.
+        :return: The switch ID that has the host connected to it and the port number of the host.
+        """
+        found_host = next(
+            (host for host in get_all_host(self.app) if host.mac == dst_mac), None
+        )
+        return (
+            (found_host.port.dpid, found_host.port.port_no)
+            if found_host
+            else (None, None)
+        )
 
+    def __find_next_hop_port(self, src_switch_id, dst_switch_id):
+        """
+        Finds the port which connects the source switch to the next hop switch in the path to the destination switch.
+        :param src_switch_id: The ID of the source switch.
+        :param dst_switch_id: The ID of the destination switch.
+        :return: The port number of the next hop switch.
+        """
+        # Build the network model.
+        model = nx.DiGraph()
+        [
+            model.add_edge(link.src.dpid, link.dst.dpid, port=link.src.port_no)
+            for link in get_all_link(self.app)
+        ]
 
-def find_next_hop_port(app, src_switch_id, dst_switch_id):
-    """
-    Finds the port which connects the source switch to the next hop switch in the path to the destination switch.
-    :param app: The Ryu application instance.
-    :param src_switch_id: The ID of the source switch.
-    :param dst_switch_id: The ID of the destination switch.
-    :return: The port number of the next hop switch.
-    """
-    # Build the network model.
-    model = nx.DiGraph()
-    [
-        model.add_edge(link.src.dpid, link.dst.dpid, port=link.src.port_no)
-        for link in get_all_link(app)
-    ]
+        # Find the shortest path between the source and destination switches.
+        path = nx.shortest_path(model, src_switch_id, dst_switch_id)
 
-    # Find the shortest path between the source and destination switches.
-    path = nx.shortest_path(model, src_switch_id, dst_switch_id)
+        # Get the first link in the path.
+        first_link = model[path[0]][path[1]]
+        # Return the port number of the first link.
+        return first_link["port"]
 
-    # Get the first link in the path.
-    first_link = model[path[0]][path[1]]
-    # Return the port number of the first link.
-    return first_link["port"]
+    def find_output_port(self, src_switch, dst_mac):
+        """
+        Finds the output port to which the packet should be sent based on the destination MAC address.
+        :param src_switch: The object representing the source switch.
+        :param dst_mac: The destination MAC address.
+        :return: The output port number.
+        """
+        # Find the switch that has the host with the specified MAC address connected to it.
+        (dst_switch_id, dst_switch_port) = self.__find_switch_by_host_mac(dst_mac)
 
+        # If the host is not found, return None.
+        if dst_switch_id is None:
+            return None
 
-def find_output_port(app, src_switch, dst_mac):
-    """
-    Finds the output port to which the packet should be sent based on the destination MAC address.
-    :param app: The Ryu application instance.
-    :param src_switch: The object representing the source switch.
-    :param dst_mac: The destination MAC address.
-    :return: The output port number.
-    """
-    # Find the switch that has the host with the specified MAC address connected to it.
-    (dst_switch_id, dst_switch_port) = find_switch_by_host_mac(app, dst_mac)
+        # If the host is directly connected to the source switch, return the port number of the host.
+        if dst_switch_id == src_switch.id:
+            return dst_switch_port
 
-    # If the host is not found, return None.
-    if dst_switch_id is None:
-        return None
-
-    # If the host is directly connected to the source switch, return the port number of the host.
-    if dst_switch_id == src_switch.id:
-        return dst_switch_port
-
-    # Otherwise, find the next hop port in the path to the destination switch.
-    return find_next_hop_port(app, src_switch.id, dst_switch_id)
+        # Otherwise, find the next hop port in the path to the destination switch.
+        return self.__find_next_hop_port(src_switch.id, dst_switch_id)
 
 
 class HopByHopSwitch(app_manager.RyuApp):
@@ -209,6 +212,8 @@ class HopByHopSwitch(app_manager.RyuApp):
         super(HopByHopSwitch, self).__init__(*args, **kwargs)
         # Initialize the MessageFactory with the Ryu application instance.
         self.message_factory = MessageFactory(self)
+        # Initialize the NetworkTopology with the Ryu application instance.
+        self.network_topology = NetworkTopology(self)
 
     # Handler for the "Switch Features" event.
     # This event is triggered when a switch connects to the controller.
@@ -250,7 +255,7 @@ class HopByHopSwitch(app_manager.RyuApp):
             return
 
         # If the packet is an IPv4 packet, find the output port to which the packet should be sent based on the destination MAC address.
-        output_port = find_output_port(self, switch, eth_in.dst)
+        output_port = self.network_topology.find_output_port(switch, eth_in.dst)
         if output_port is None:
             return
 
