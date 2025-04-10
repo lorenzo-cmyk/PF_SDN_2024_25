@@ -73,7 +73,7 @@ class MessageFactory:
 
         # Handle only ARP requests, ignore all other types of ARP packets.
         if arp_in.opcode != arp.ARP_REQUEST:
-            return
+            return None
 
         # Finds the MAC address of the host that has the IP address specified in the ARP request.
         # If the host is not found, the function returns without doing anything.
@@ -228,7 +228,7 @@ class BabyElephantWalk(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
-        super(BabyElephantWalk, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         # Initialize the MessageFactory with the Ryu application instance.
         self.message_factory = MessageFactory(self)
         # Initialize the NetworkTopology with the Ryu application instance.
