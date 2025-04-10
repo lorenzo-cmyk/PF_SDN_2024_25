@@ -1,3 +1,5 @@
+"""Baby Elephant Walk - Ryu SDN Application"""
+
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import set_ev_cls, CONFIG_DISPATCHER, MAIN_DISPATCHER
@@ -184,10 +186,8 @@ class NetworkTopology:
         """
         # Build the network model.
         model = nx.DiGraph()
-        [
+        for link in get_all_link(self.app):
             model.add_edge(link.src.dpid, link.dst.dpid, port=link.src.port_no)
-            for link in get_all_link(self.app)
-        ]
 
         # Find the shortest path between the source and destination switches.
         path = nx.shortest_path(model, src_switch_id, dst_switch_id)
@@ -222,6 +222,9 @@ class NetworkTopology:
 
 
 class BabyElephantWalk(app_manager.RyuApp):
+    """Main class of the Ryu application. It contains the event handlers and - therefore - the
+    main logic of the controller. It serves as the entry point for the SDN app."""
+
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
@@ -231,6 +234,7 @@ class BabyElephantWalk(app_manager.RyuApp):
         # Initialize the NetworkTopology with the Ryu application instance.
         self.network_topology = NetworkTopology(self)
 
+    # pylint: disable=no-member
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def handle_switch_features(self, ev):
         """Handler for the "Switch Features" event.
@@ -240,6 +244,7 @@ class BabyElephantWalk(app_manager.RyuApp):
         switch = ev.msg.datapath
         switch.send_msg(self.message_factory.default_configuration(switch))
 
+    # pylint: disable=no-member
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def handle_packet_in(self, ev):
         """Handler for the "Packet In" event.
