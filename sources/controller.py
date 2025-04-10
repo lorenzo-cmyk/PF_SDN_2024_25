@@ -275,6 +275,10 @@ class BabyElephantWalk(app_manager.RyuApp):
 
         # If the packet is not an IPv4 packet ignore it.
         if eth_in.ethertype != ether_types.ETH_TYPE_IP:
+            # Lots of non-IPv4 traffic is sent to the controller: most of them are LLDP multicast
+            # and IPv6 RS packets. We are going to ignore them, this is totally fine.
+            # For more information see the following issue on GitHub:
+            # https://github.com/TheManchineel/sdn-project/issues/3#issuecomment-2794506696
             return
 
         # If the packet is an IPv4 packet, find the output port to which the packet should be sent
