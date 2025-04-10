@@ -233,6 +233,8 @@ class BabyElephantWalk(app_manager.RyuApp):
         self.message_factory = MessageFactory(self)
         # Initialize the NetworkTopology with the Ryu application instance.
         self.network_topology = NetworkTopology(self)
+        # Log the initialization of the application.
+        self.logger.info("init: BabyElephantWalk application initialized!")
 
     # pylint: disable=no-member
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
@@ -243,6 +245,11 @@ class BabyElephantWalk(app_manager.RyuApp):
         # Retrive the switch object from the event. Send to it the default configuration.
         switch = ev.msg.datapath
         switch.send_msg(self.message_factory.default_configuration(switch))
+        # Log the connection of the switch.
+        self.logger.info(
+            "switch_features: Switch %s connected. Default configuration has been sent.",
+            switch.id,
+        )
 
     # pylint: disable=no-member
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
@@ -265,13 +272,22 @@ class BabyElephantWalk(app_manager.RyuApp):
             fm_arp_reply = self.message_factory.arp_proxy(ofmessage)
             if fm_arp_reply is not None:
                 switch.send_msg(fm_arp_reply)
+            else:
+                self.logger.warning(
+                    "packet_in: ARP request received from %s for IP %s. "
+                    "Unable to reply: host not known.",
+                    eth_in.src,
+                    pkt_in.get_protocol(arp.arp).dst_ip,
+                )
             return
 
         # Drop spurious broadcast traffic.
         if eth_in.dst == "ff:ff:ff:ff:ff:ff":
+            self.logger.warning(
+                "packet_in: Spurious broadcast traffic received from %s. Dropping the packet.",
+                eth_in.src,
+            )
             return
-
-        ### L3 Manipulation ###
 
         # If the packet is not an IPv4 packet ignore it.
         if eth_in.ethertype != ether_types.ETH_TYPE_IP:
@@ -279,12 +295,20 @@ class BabyElephantWalk(app_manager.RyuApp):
             # and IPv6 RS packets. We are going to ignore them, this is totally fine.
             # For more information see the following issue on GitHub:
             # https://github.com/TheManchineel/sdn-project/issues/3#issuecomment-2794506696
+
+            # Logging this traffic is pointless, it's just noise and it going to spam the logs.
             return
 
         # If the packet is an IPv4 packet, find the output port to which the packet should be sent
         # based on the destination MAC address.
         output_port = self.network_topology.find_output_port(switch, eth_in.dst)
         if output_port is None:
+            # Unable to find a route to the destination MAC address. Dropping the packet.
+            self.logger.warning(
+                "packet_in: Unable to find a route from switch %s to host %s. Dropping the packet.",
+                switch.id,
+                eth_in.dst,
+            )
             return
 
         fm_pkt_forward = self.message_factory.forward_packet(
