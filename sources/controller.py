@@ -295,12 +295,11 @@ class BabyElephantWalk(app_manager.RyuApp):
             # and IPv6 RS packets. We are going to ignore them, this is totally fine.
             # For more information see the following issue on GitHub:
             # https://github.com/TheManchineel/sdn-project/issues/3#issuecomment-2794506696
-
             # Logging this traffic is pointless, it's just noise and it going to spam the logs.
             return
 
         # If the packet is an IPv4 packet, find the output port to which the packet should be sent
-        # based on the destination MAC address.
+        # based on the destination MAC address and forward it.
         output_port = self.network_topology.find_output_port(switch, eth_in.dst)
         if output_port is None:
             # Unable to find a route to the destination MAC address. Dropping the packet.
