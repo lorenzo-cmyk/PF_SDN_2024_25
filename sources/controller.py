@@ -5,7 +5,7 @@ from ryu.controller import ofp_event
 from ryu.controller.handler import set_ev_cls, CONFIG_DISPATCHER, MAIN_DISPATCHER
 from ryu.ofproto import ofproto_v1_3
 from ryu.topology.api import get_all_link, get_all_host
-from ryu.lib.packet import packet, ethernet, ether_types, arp
+from ryu.lib.packet import packet, ethernet, ether_types, arp, ipv4, tcp
 import networkx as nx
 
 
@@ -221,6 +221,89 @@ class NetworkTopology:
         return self.__find_next_hop_port(src_switch.id, dst_switch_id)
 
 
+class ConnectionManager:
+    """Class used to manage TCP connections between hosts."""
+
+    class Connection:
+        """Class used to represent a TCP connection between two hosts."""
+
+        def __init__(self, ip_a, port_a, ip_b, port_b):
+            """Initializes a TCP connection between the specified hosts.
+            :param ip_a: The IP address of the first host.
+            :param port_a: The port number of the first host.
+            :param ip_b: The IP address of the second host.
+            :param port_b: The port number of the second host.
+            """
+            self.ip_a = ip_a
+            self.port_a = port_a
+            self.ip_b = ip_b
+            self.port_b = port_b
+            self.volume = 0
+
+        def __str__(self):
+            """Returns a string representation of the TCP connection."""
+            return (
+                f"Connection({self.ip_a}:{self.port_a} <-> {self.ip_b}:{self.port_b}) | "
+                f"Volume: {self.volume}"
+            )
+
+    def __init__(self):
+        """Initializes the ConnectionManager with an empty list of connections."""
+        self._connections = {}
+
+    def __canonicalize(self, ip_a, port_a, ip_b, port_b):
+        """Returns the canonical representation of a TCP connection between two hosts.
+        :param ip_a: The IP address of the first host.
+        :param port_a: The port number of the first host.
+        :param ip_b: The IP address of the second host.
+        :param port_b: The port number of the second host.
+        :return: A tuple representing the canonical representation of the TCP connection.
+        """
+        uplink = (ip_a, port_a, ip_b, port_b)
+        downlink = (ip_b, port_b, ip_a, port_a)
+        return min(uplink, downlink)
+
+    def retrieve_connection(self, ip_a, port_a, ip_b, port_b):
+        """Retrieve the TCP connection object from the specified parameters.
+        If the connection does not exist, it creates a new one on the fly.
+        :param ip_a: The IP address of the first host.
+        :param port_a: The port number of the first host.
+        :param ip_b: The IP address of the second host.
+        :param port_b: The port number of the second host.
+        :return: The TCP connection object.
+        """
+        # Get the canonical representation of the TCP connection.
+        key = self.__canonicalize(ip_a, port_a, ip_b, port_b)
+
+        # Try to retrieve the connection from the dictionary.
+        tcp_conn = self._connections.get(key)
+        if tcp_conn is None:
+            # The connection does not exist, create a new one!
+            tcp_conn = self.Connection(ip_a, port_a, ip_b, port_b)
+            self._connections[key] = tcp_conn
+        return tcp_conn
+
+    def remove_connection(self, ip_a, port_a, ip_b, port_b):
+        """Removes the TCP connection with the specified parameters.
+        :param ip_a: The IP address of the first host.
+        :param port_a: The port number of the first host.
+        :param ip_b: The IP address of the second host.
+        :param port_b: The port number of the second host.
+        """
+        # Get the canonical representation of the TCP connection.
+        key = self.__canonicalize(ip_a, port_a, ip_b, port_b)
+        # Remove the connection from the dictionary.
+        self._connections.pop(key, None)
+
+    def __len__(self):
+        """Returns the number of TCP connections managed by the ConnectionManager."""
+        return len(self._connections)
+
+    def __iter__(self):
+        """Returns an iterator over the TCP connections managed by the ConnectionManager."""
+        return iter(self._connections.values())
+
+
 class BabyElephantWalk(app_manager.RyuApp):
     """Main class of the Ryu application. It contains the event handlers and - therefore - the
     main logic of the controller. It serves as the entry point for the SDN app."""
@@ -233,6 +316,8 @@ class BabyElephantWalk(app_manager.RyuApp):
         self.message_factory = MessageFactory(self)
         # Initialize the NetworkTopology with the Ryu application instance.
         self.network_topology = NetworkTopology(self)
+        # Initialize the ConnectionManager with the Ryu application instance.
+        self.connection_manager = ConnectionManager()
         # Log the initialization of the application.
         self.logger.info("init: BabyElephantWalk application initialized!")
 
@@ -314,3 +399,24 @@ class BabyElephantWalk(app_manager.RyuApp):
             switch, output_port, ofmessage
         )
         switch.send_msg(fm_pkt_forward)
+
+        ### L3 Manipulation ###
+
+        # We know for sure that the packet is an IPv4 packet, it will also be a TCP packet?
+        ip_in = pkt_in.get_protocol(ipv4.ipv4)
+        if ip_in.proto != 6:
+            # IPv4 protocol 6 is TCP, all other protocols can be ignored for our purposes.
+            pass
+        else:
+            # The packet is a TCP packet, let's parse it.
+            tcp_in = pkt_in.get_protocol(tcp.tcp)
+            # Retrieve the connection from the ConnectionManager.
+            tcp_conn = self.connection_manager.retrieve_connection(
+                ip_in.src, tcp_in.src_port, ip_in.dst, tcp_in.dst_port
+            )
+            # Update the volume of the connection.
+            tcp_conn.volume += len(pkt_in.data)
+            # Log the connection.
+            self.logger.info("packet_in: %s", tcp_conn)
+
+        return
