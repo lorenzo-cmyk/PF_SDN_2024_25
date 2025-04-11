@@ -5,7 +5,7 @@ from ryu.controller import ofp_event
 from ryu.controller.handler import set_ev_cls, CONFIG_DISPATCHER, MAIN_DISPATCHER
 from ryu.ofproto import ofproto_v1_3
 from ryu.topology.api import get_all_link, get_all_host
-from ryu.lib.packet import packet, ethernet, ether_types, arp
+from ryu.lib.packet import packet, ethernet, ether_types, arp, ipv4, tcp
 import networkx as nx
 
 
@@ -13,8 +13,11 @@ class MessageFactory:
     """Class used to generate FlowMod messages to be sent to the switches."""
 
     def __init__(self, app):
-        """Initializes the MessageFactory with the Ryu application instance."""
-        self.app = app
+        """Initializes the MessageFactory with the Ryu application instance.
+        :param app: The Ryu application instance.
+        """
+        # Store the Ryu application instance.
+        self._app = app
 
     def default_configuration(self, switch):
         """
@@ -78,7 +81,11 @@ class MessageFactory:
         # Finds the MAC address of the host that has the IP address specified in the ARP request.
         # If the host is not found, the function returns without doing anything.
         target_mac_address = next(
-            (host.mac for host in get_all_host(self.app) if arp_in.dst_ip in host.ipv4),
+            (
+                host.mac
+                for host in get_all_host(self._app)
+                if arp_in.dst_ip in host.ipv4
+            ),
             None,
         )
         if target_mac_address is None:
@@ -153,13 +160,61 @@ class MessageFactory:
 
         return pkt_out
 
+    def forward_tcp_stream_configuration(
+        self, switch, ip_scr, port_src, ip_dst, port_dst, out_port
+    ):
+        """
+        Generates a FlowMod message that instructs the switch to forward a TCP stream, identified
+        by the IPs and ports combination, to the specified output port.
+        :param switch: The switch on which the rule will be installed.
+        :param ip_scr: The source IP address of the TCP stream.
+        :param port_src: The TCP source port.
+        :param ip_dst: The destination IP address of the TCP stream.
+        :param port_dst: The TCP destination port.
+        :param out_port: The output port to which the TCP stream will be forwarded.
+        :return: The FlowMod message to be sent to the switch.
+        """
+        # Retrieve the OpenFlow protocol object and relative parser from the switch.
+        ofprotocol = switch.ofproto
+        ofparser = switch.ofproto_parser
+
+        # Build the FlowMod message to instruct the switch to forward the TCP stream to the
+        # specified output port.
+        # Match: match the TCP stream based on the IPs and ports combination.
+        match = ofparser.OFPMatch(
+            eth_type=ether_types.ETH_TYPE_IP,
+            ipv4_src=ip_scr,
+            ipv4_dst=ip_dst,
+            ip_proto=6,  # IPv4 protocol 6 is TCP
+            tcp_src=port_src,
+            tcp_dst=port_dst,
+        )
+        # Instructions: apply the action: send everything to the specified output port.
+        instructions = [
+            ofparser.OFPInstructionActions(
+                ofprotocol.OFPIT_APPLY_ACTIONS,
+                [ofparser.OFPActionOutput(out_port)],
+            )
+        ]
+        # Rule: build the FlowMod message ready to be sent to the switch.
+        rule = ofparser.OFPFlowMod(
+            datapath=switch,
+            priority=69,
+            match=match,
+            instructions=instructions,
+        )
+        return rule
+
 
 class NetworkTopology:
     """Class used to represent the network topology."""
 
     def __init__(self, app):
-        """Initializes the NetworkTopology with the Ryu application instance."""
-        self.app = app
+        """Initializes the NetworkTopology with the Ryu application instance.
+        :param app: The Ryu application instance.
+        """
+        # Store the Ryu application instance.
+        self._app = app
 
     def __find_switch_by_host_mac(self, dst_mac):
         """
@@ -168,7 +223,7 @@ class NetworkTopology:
         :return: The switch ID that has the host connected to it and the port number of the host.
         """
         found_host = next(
-            (host for host in get_all_host(self.app) if host.mac == dst_mac), None
+            (host for host in get_all_host(self._app) if host.mac == dst_mac), None
         )
         return (
             (found_host.port.dpid, found_host.port.port_no)
@@ -186,7 +241,7 @@ class NetworkTopology:
         """
         # Build the network model.
         model = nx.DiGraph()
-        for link in get_all_link(self.app):
+        for link in get_all_link(self._app):
             model.add_edge(link.src.dpid, link.dst.dpid, port=link.src.port_no)
 
         # Find the shortest path between the source and destination switches.
@@ -221,6 +276,71 @@ class NetworkTopology:
         return self.__find_next_hop_port(src_switch.id, dst_switch_id)
 
 
+class ConnectionManager:
+    """Class used to manage TCP connections between hosts."""
+
+    class Connection:
+        """Class used to represent a TCP connection between two hosts."""
+
+        def __init__(self, ip_a, port_a, ip_b, port_b):
+            """Initializes a TCP connection between the specified hosts.
+            :param ip_a: The IP address of the first host.
+            :param port_a: The port number of the first host.
+            :param ip_b: The IP address of the second host.
+            :param port_b: The port number of the second host.
+            """
+            self.ip_a = ip_a
+            self.port_a = port_a
+            self.ip_b = ip_b
+            self.port_b = port_b
+            self.volume = 0
+
+        def __str__(self):
+            """Returns a string representation of the TCP connection."""
+            return (
+                f"Connection({self.ip_a}:{self.port_a} <-> {self.ip_b}:{self.port_b}) | "
+                f"Volume: {self.volume}"
+            )
+
+    def __init__(self):
+        """Initializes the ConnectionManager with an empty list of connections."""
+        self._connections = {}
+
+    def __canonicalize(self, ip_a, port_a, ip_b, port_b):
+        """Returns the canonical representation of a TCP connection between two hosts.
+        :param ip_a: The IP address of the first host.
+        :param port_a: The port number of the first host.
+        :param ip_b: The IP address of the second host.
+        :param port_b: The port number of the second host.
+        :return: A tuple representing the canonical representation of the TCP connection.
+        """
+        uplink = (ip_a, port_a, ip_b, port_b)
+        downlink = (ip_b, port_b, ip_a, port_a)
+        # The canonical representation of a TCP connection is the one with the lowest tuple.
+        # This is done to avoid having two different representations of the same connection.
+        return min(uplink, downlink)
+
+    def retrieve_connection(self, ip_a, port_a, ip_b, port_b):
+        """Retrieve the TCP connection object from the specified parameters.
+        If the connection does not exist, it creates a new one on the fly.
+        :param ip_a: The IP address of the first host.
+        :param port_a: The port number of the first host.
+        :param ip_b: The IP address of the second host.
+        :param port_b: The port number of the second host.
+        :return: The TCP connection object.
+        """
+        # Get the canonical representation of the TCP connection.
+        key = self.__canonicalize(ip_a, port_a, ip_b, port_b)
+
+        # Try to retrieve the connection from the dictionary.
+        tcp_conn = self._connections.get(key)
+        if tcp_conn is None:
+            # The connection does not exist, create a new one!
+            tcp_conn = self.Connection(ip_a, port_a, ip_b, port_b)
+            self._connections[key] = tcp_conn
+        return tcp_conn
+
+
 class BabyElephantWalk(app_manager.RyuApp):
     """Main class of the Ryu application. It contains the event handlers and - therefore - the
     main logic of the controller. It serves as the entry point for the SDN app."""
@@ -228,11 +348,17 @@ class BabyElephantWalk(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
+        """Initializes the BabyElephantWalk Ryu application.
+        :param args: The arguments to be passed to the Ryu application.
+        :param kwargs: The keyword arguments to be passed to the Ryu application.
+        """
         super().__init__(*args, **kwargs)
         # Initialize the MessageFactory with the Ryu application instance.
-        self.message_factory = MessageFactory(self)
+        self._message_factory = MessageFactory(self)
         # Initialize the NetworkTopology with the Ryu application instance.
-        self.network_topology = NetworkTopology(self)
+        self._network_topology = NetworkTopology(self)
+        # Initialize the ConnectionManager with the Ryu application instance.
+        self._connection_manager = ConnectionManager()
         # Log the initialization of the application.
         self.logger.info("init: BabyElephantWalk application initialized!")
 
@@ -241,10 +367,11 @@ class BabyElephantWalk(app_manager.RyuApp):
     def handle_switch_features(self, ev):
         """Handler for the "Switch Features" event.
         This event is triggered when a switch connects to the controller.
+        :param ev: The event object containing the switch features.
         """
         # Retrive the switch object from the event. Send to it the default configuration.
         switch = ev.msg.datapath
-        switch.send_msg(self.message_factory.default_configuration(switch))
+        switch.send_msg(self._message_factory.default_configuration(switch))
         # Log the connection of the switch.
         self.logger.info(
             "switch_features: Switch %s connected. Default configuration has been sent.",
@@ -256,6 +383,7 @@ class BabyElephantWalk(app_manager.RyuApp):
     def handle_packet_in(self, ev):
         """Handler for the "Packet In" event.
         This event is triggered when a packet is received by the switch and sent to the controller.
+        :param ev: The event object containing the packet information.
         """
         # Retrive the message and the switch object from the event.
         ofmessage = ev.msg
@@ -269,7 +397,7 @@ class BabyElephantWalk(app_manager.RyuApp):
 
         # If the packet is an ARP request act as a proxy and reply to it.
         if eth_in.ethertype == ether_types.ETH_TYPE_ARP:
-            fm_arp_reply = self.message_factory.arp_proxy(ofmessage)
+            fm_arp_reply = self._message_factory.arp_proxy(ofmessage)
             if fm_arp_reply is not None:
                 switch.send_msg(fm_arp_reply)
             else:
@@ -295,13 +423,12 @@ class BabyElephantWalk(app_manager.RyuApp):
             # and IPv6 RS packets. We are going to ignore them, this is totally fine.
             # For more information see the following issue on GitHub:
             # https://github.com/TheManchineel/sdn-project/issues/3#issuecomment-2794506696
-
             # Logging this traffic is pointless, it's just noise and it going to spam the logs.
             return
 
         # If the packet is an IPv4 packet, find the output port to which the packet should be sent
-        # based on the destination MAC address.
-        output_port = self.network_topology.find_output_port(switch, eth_in.dst)
+        # based on the destination MAC address and forward it.
+        output_port = self._network_topology.find_output_port(switch, eth_in.dst)
         if output_port is None:
             # Unable to find a route to the destination MAC address. Dropping the packet.
             self.logger.warning(
@@ -311,7 +438,87 @@ class BabyElephantWalk(app_manager.RyuApp):
             )
             return
 
-        fm_pkt_forward = self.message_factory.forward_packet(
+        fm_pkt_forward = self._message_factory.forward_packet(
             switch, output_port, ofmessage
         )
         switch.send_msg(fm_pkt_forward)
+
+        ### L3 Manipulation ###
+
+        # We know for sure that the packet is an IPv4 packet, it will also be a TCP packet?
+        ip_in = pkt_in.get_protocol(ipv4.ipv4)
+        if ip_in.proto != 6:
+            # IPv4 protocol 6 is TCP, all other protocols can be ignored for our purposes.
+            pass
+        else:
+            # The packet is a TCP packet, let's parse it.
+            tcp_in = pkt_in.get_protocol(tcp.tcp)
+            # Retrieve the connection from the ConnectionManager.
+            tcp_conn = self._connection_manager.retrieve_connection(
+                ip_in.src, tcp_in.src_port, ip_in.dst, tcp_in.dst_port
+            )
+            # Update the volume of the connection.
+            tcp_conn.volume += len(pkt_in.data)
+            # TODO: Evrything from this point on is a POC!!
+            # Log the connection.
+            self.logger.info("packet_in: %s", tcp_conn)
+            if tcp_conn.volume > 100000:
+                # Install a rule to forward the TCP stream.
+                host_a_mac, host_a_ip, host_a_port = (
+                    eth_in.src,
+                    ip_in.src,
+                    tcp_in.src_port,
+                )
+                host_b_mac, host_b_ip, host_b_port = (
+                    eth_in.dst,
+                    ip_in.dst,
+                    tcp_in.dst_port,
+                )
+
+                # Rule for traffic A -> B
+                output_port_a_b = self._network_topology.find_output_port(
+                    switch, host_b_mac
+                )
+                if output_port_a_b is not None:
+                    fm_rule_a_b = (
+                        self._message_factory.forward_tcp_stream_configuration(
+                            switch,
+                            host_a_ip,
+                            host_a_port,
+                            host_b_ip,
+                            host_b_port,
+                            output_port_a_b,
+                        )
+                    )
+                    switch.send_msg(fm_rule_a_b)
+                else:
+                    self.logger.warning(
+                        "packet_in: Unable to find a route from switch %s to host %s. "
+                        "Not installing rule!!!",
+                        switch.id,
+                        host_b_mac,
+                    )
+
+                # Rule for traffic B -> A
+                output_port_b_a = self._network_topology.find_output_port(
+                    switch, host_a_mac
+                )
+                if output_port_b_a is not None:
+                    fm_rule_b_a = (
+                        self._message_factory.forward_tcp_stream_configuration(
+                            switch,
+                            host_b_ip,
+                            host_b_port,
+                            host_a_ip,
+                            host_a_port,
+                            output_port_b_a,
+                        )
+                    )
+                    switch.send_msg(fm_rule_b_a)
+                else:
+                    self.logger.warning(
+                        "packet_in: Unable to find a route from switch %s to host %s. "
+                        "Not installing rule!!!",
+                        switch.id,
+                        host_a_mac,
+                    )
