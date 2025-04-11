@@ -13,8 +13,11 @@ class MessageFactory:
     """Class used to generate FlowMod messages to be sent to the switches."""
 
     def __init__(self, app):
-        """Initializes the MessageFactory with the Ryu application instance."""
-        self.app = app
+        """Initializes the MessageFactory with the Ryu application instance.
+        :param app: The Ryu application instance.
+        """
+        # Store the Ryu application instance.
+        self._app = app
 
     def default_configuration(self, switch):
         """
@@ -78,7 +81,11 @@ class MessageFactory:
         # Finds the MAC address of the host that has the IP address specified in the ARP request.
         # If the host is not found, the function returns without doing anything.
         target_mac_address = next(
-            (host.mac for host in get_all_host(self.app) if arp_in.dst_ip in host.ipv4),
+            (
+                host.mac
+                for host in get_all_host(self._app)
+                if arp_in.dst_ip in host.ipv4
+            ),
             None,
         )
         if target_mac_address is None:
@@ -158,8 +165,11 @@ class NetworkTopology:
     """Class used to represent the network topology."""
 
     def __init__(self, app):
-        """Initializes the NetworkTopology with the Ryu application instance."""
-        self.app = app
+        """Initializes the NetworkTopology with the Ryu application instance.
+        :param app: The Ryu application instance.
+        """
+        # Store the Ryu application instance.
+        self._app = app
 
     def __find_switch_by_host_mac(self, dst_mac):
         """
@@ -168,7 +178,7 @@ class NetworkTopology:
         :return: The switch ID that has the host connected to it and the port number of the host.
         """
         found_host = next(
-            (host for host in get_all_host(self.app) if host.mac == dst_mac), None
+            (host for host in get_all_host(self._app) if host.mac == dst_mac), None
         )
         return (
             (found_host.port.dpid, found_host.port.port_no)
@@ -186,7 +196,7 @@ class NetworkTopology:
         """
         # Build the network model.
         model = nx.DiGraph()
-        for link in get_all_link(self.app):
+        for link in get_all_link(self._app):
             model.add_edge(link.src.dpid, link.dst.dpid, port=link.src.port_no)
 
         # Find the shortest path between the source and destination switches.
@@ -261,6 +271,8 @@ class ConnectionManager:
         """
         uplink = (ip_a, port_a, ip_b, port_b)
         downlink = (ip_b, port_b, ip_a, port_a)
+        # The canonical representation of a TCP connection is the one with the lowest tuple.
+        # This is done to avoid having two different representations of the same connection.
         return min(uplink, downlink)
 
     def retrieve_connection(self, ip_a, port_a, ip_b, port_b):
@@ -283,26 +295,6 @@ class ConnectionManager:
             self._connections[key] = tcp_conn
         return tcp_conn
 
-    def remove_connection(self, ip_a, port_a, ip_b, port_b):
-        """Removes the TCP connection with the specified parameters.
-        :param ip_a: The IP address of the first host.
-        :param port_a: The port number of the first host.
-        :param ip_b: The IP address of the second host.
-        :param port_b: The port number of the second host.
-        """
-        # Get the canonical representation of the TCP connection.
-        key = self.__canonicalize(ip_a, port_a, ip_b, port_b)
-        # Remove the connection from the dictionary.
-        self._connections.pop(key, None)
-
-    def __len__(self):
-        """Returns the number of TCP connections managed by the ConnectionManager."""
-        return len(self._connections)
-
-    def __iter__(self):
-        """Returns an iterator over the TCP connections managed by the ConnectionManager."""
-        return iter(self._connections.values())
-
 
 class BabyElephantWalk(app_manager.RyuApp):
     """Main class of the Ryu application. It contains the event handlers and - therefore - the
@@ -311,13 +303,17 @@ class BabyElephantWalk(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
+        """Initializes the BabyElephantWalk Ryu application.
+        :param args: The arguments to be passed to the Ryu application.
+        :param kwargs: The keyword arguments to be passed to the Ryu application.
+        """
         super().__init__(*args, **kwargs)
         # Initialize the MessageFactory with the Ryu application instance.
-        self.message_factory = MessageFactory(self)
+        self._message_factory = MessageFactory(self)
         # Initialize the NetworkTopology with the Ryu application instance.
-        self.network_topology = NetworkTopology(self)
+        self._network_topology = NetworkTopology(self)
         # Initialize the ConnectionManager with the Ryu application instance.
-        self.connection_manager = ConnectionManager()
+        self._connection_manager = ConnectionManager()
         # Log the initialization of the application.
         self.logger.info("init: BabyElephantWalk application initialized!")
 
@@ -326,10 +322,11 @@ class BabyElephantWalk(app_manager.RyuApp):
     def handle_switch_features(self, ev):
         """Handler for the "Switch Features" event.
         This event is triggered when a switch connects to the controller.
+        :param ev: The event object containing the switch features.
         """
         # Retrive the switch object from the event. Send to it the default configuration.
         switch = ev.msg.datapath
-        switch.send_msg(self.message_factory.default_configuration(switch))
+        switch.send_msg(self._message_factory.default_configuration(switch))
         # Log the connection of the switch.
         self.logger.info(
             "switch_features: Switch %s connected. Default configuration has been sent.",
@@ -341,6 +338,7 @@ class BabyElephantWalk(app_manager.RyuApp):
     def handle_packet_in(self, ev):
         """Handler for the "Packet In" event.
         This event is triggered when a packet is received by the switch and sent to the controller.
+        :param ev: The event object containing the packet information.
         """
         # Retrive the message and the switch object from the event.
         ofmessage = ev.msg
@@ -354,7 +352,7 @@ class BabyElephantWalk(app_manager.RyuApp):
 
         # If the packet is an ARP request act as a proxy and reply to it.
         if eth_in.ethertype == ether_types.ETH_TYPE_ARP:
-            fm_arp_reply = self.message_factory.arp_proxy(ofmessage)
+            fm_arp_reply = self._message_factory.arp_proxy(ofmessage)
             if fm_arp_reply is not None:
                 switch.send_msg(fm_arp_reply)
             else:
@@ -385,7 +383,7 @@ class BabyElephantWalk(app_manager.RyuApp):
 
         # If the packet is an IPv4 packet, find the output port to which the packet should be sent
         # based on the destination MAC address and forward it.
-        output_port = self.network_topology.find_output_port(switch, eth_in.dst)
+        output_port = self._network_topology.find_output_port(switch, eth_in.dst)
         if output_port is None:
             # Unable to find a route to the destination MAC address. Dropping the packet.
             self.logger.warning(
@@ -395,7 +393,7 @@ class BabyElephantWalk(app_manager.RyuApp):
             )
             return
 
-        fm_pkt_forward = self.message_factory.forward_packet(
+        fm_pkt_forward = self._message_factory.forward_packet(
             switch, output_port, ofmessage
         )
         switch.send_msg(fm_pkt_forward)
@@ -411,12 +409,10 @@ class BabyElephantWalk(app_manager.RyuApp):
             # The packet is a TCP packet, let's parse it.
             tcp_in = pkt_in.get_protocol(tcp.tcp)
             # Retrieve the connection from the ConnectionManager.
-            tcp_conn = self.connection_manager.retrieve_connection(
+            tcp_conn = self._connection_manager.retrieve_connection(
                 ip_in.src, tcp_in.src_port, ip_in.dst, tcp_in.dst_port
             )
             # Update the volume of the connection.
             tcp_conn.volume += len(pkt_in.data)
             # Log the connection.
             self.logger.info("packet_in: %s", tcp_conn)
-
-        return
