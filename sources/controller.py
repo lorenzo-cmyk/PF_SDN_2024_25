@@ -160,6 +160,51 @@ class MessageFactory:
 
         return pkt_out
 
+    def forward_tcp_stream_configuration(
+        self, switch, ip_scr, port_src, ip_dst, port_dst, out_port
+    ):
+        """
+        Generates a FlowMod message that instructs the switch to forward a TCP stream, identified
+        by the IPs and ports combination, to the specified output port.
+        :param switch: The switch on which the rule will be installed.
+        :param ip_scr: The source IP address of the TCP stream.
+        :param port_src: The TCP source port.
+        :param ip_dst: The destination IP address of the TCP stream.
+        :param port_dst: The TCP destination port.
+        :param out_port: The output port to which the TCP stream will be forwarded.
+        :return: The FlowMod message to be sent to the switch.
+        """
+        # Retrieve the OpenFlow protocol object and relative parser from the switch.
+        ofprotocol = switch.ofproto
+        ofparser = switch.ofproto_parser
+
+        # Build the FlowMod message to instruct the switch to forward the TCP stream to the
+        # specified output port.
+        # Match: match the TCP stream based on the IPs and ports combination.
+        match = ofparser.OFPMatch(
+            eth_type=ether_types.ETH_TYPE_IP,
+            ipv4_src=ip_scr,
+            ipv4_dst=ip_dst,
+            ip_proto=6,  # IPv4 protocol 6 is TCP
+            tcp_src=port_src,
+            tcp_dst=port_dst,
+        )
+        # Instructions: apply the action: send everything to the specified output port.
+        instructions = [
+            ofparser.OFPInstructionActions(
+                ofprotocol.OFPIT_APPLY_ACTIONS,
+                [ofparser.OFPActionOutput(out_port)],
+            )
+        ]
+        # Rule: build the FlowMod message ready to be sent to the switch.
+        rule = ofparser.OFPFlowMod(
+            datapath=switch,
+            priority=69,
+            match=match,
+            instructions=instructions,
+        )
+        return rule
+
 
 class NetworkTopology:
     """Class used to represent the network topology."""
@@ -414,5 +459,66 @@ class BabyElephantWalk(app_manager.RyuApp):
             )
             # Update the volume of the connection.
             tcp_conn.volume += len(pkt_in.data)
+            # TODO: Evrything from this point on is a POC!!
             # Log the connection.
             self.logger.info("packet_in: %s", tcp_conn)
+            if tcp_conn.volume > 100000:
+                # Install a rule to forward the TCP stream.
+                host_a_mac, host_a_ip, host_a_port = (
+                    eth_in.src,
+                    ip_in.src,
+                    tcp_in.src_port,
+                )
+                host_b_mac, host_b_ip, host_b_port = (
+                    eth_in.dst,
+                    ip_in.dst,
+                    tcp_in.dst_port,
+                )
+
+                # Rule for traffic A -> B
+                output_port_a_b = self._network_topology.find_output_port(
+                    switch, host_b_mac
+                )
+                if output_port_a_b is not None:
+                    fm_rule_a_b = (
+                        self._message_factory.forward_tcp_stream_configuration(
+                            switch,
+                            host_a_ip,
+                            host_a_port,
+                            host_b_ip,
+                            host_b_port,
+                            output_port_a_b,
+                        )
+                    )
+                    switch.send_msg(fm_rule_a_b)
+                else:
+                    self.logger.warning(
+                        "packet_in: Unable to find a route from switch %s to host %s. "
+                        "Not installing rule!!!",
+                        switch.id,
+                        host_b_mac,
+                    )
+
+                # Rule for traffic B -> A
+                output_port_b_a = self._network_topology.find_output_port(
+                    switch, host_a_mac
+                )
+                if output_port_b_a is not None:
+                    fm_rule_b_a = (
+                        self._message_factory.forward_tcp_stream_configuration(
+                            switch,
+                            host_b_ip,
+                            host_b_port,
+                            host_a_ip,
+                            host_a_port,
+                            output_port_b_a,
+                        )
+                    )
+                    switch.send_msg(fm_rule_b_a)
+                else:
+                    self.logger.warning(
+                        "packet_in: Unable to find a route from switch %s to host %s. "
+                        "Not installing rule!!!",
+                        switch.id,
+                        host_a_mac,
+                    )
