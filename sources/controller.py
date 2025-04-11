@@ -203,6 +203,7 @@ class MessageFactory:
             match=match,
             instructions=instructions,
         )
+
         return rule
 
 
@@ -294,13 +295,6 @@ class ConnectionManager:
             self.ip_b = ip_b
             self.port_b = port_b
             self.volume = 0
-
-        def __str__(self):
-            """Returns a string representation of the TCP connection."""
-            return (
-                f"Connection({self.ip_a}:{self.port_a} <-> {self.ip_b}:{self.port_b}) | "
-                f"Volume: {self.volume}"
-            )
 
     def __init__(self):
         """Initializes the ConnectionManager with an empty list of connections."""
@@ -429,7 +423,12 @@ class BabyElephantWalk(app_manager.RyuApp):
         # If the packet is an IPv4 packet, find the output port to which the packet should be sent
         # based on the destination MAC address and forward it.
         output_port = self._network_topology.find_output_port(switch, eth_in.dst)
-        if output_port is None:
+        if output_port is not None:
+            fm_pkt_forward = self._message_factory.forward_packet(
+                switch, output_port, ofmessage
+            )
+            switch.send_msg(fm_pkt_forward)
+        else:
             # Unable to find a route to the destination MAC address. Dropping the packet.
             self.logger.warning(
                 "packet_in: Unable to find a route from switch %s to host %s. Dropping the packet.",
@@ -437,11 +436,6 @@ class BabyElephantWalk(app_manager.RyuApp):
                 eth_in.dst,
             )
             return
-
-        fm_pkt_forward = self._message_factory.forward_packet(
-            switch, output_port, ofmessage
-        )
-        switch.send_msg(fm_pkt_forward)
 
         ### L3 Manipulation ###
 
