@@ -9,6 +9,16 @@ from ryu.lib.packet import packet, ethernet, ether_types, arp, ipv4, tcp
 import networkx as nx
 
 
+# Priority of the TCP forwarding rules.
+TCP_FORWARDING_RULE_PRIORITY = 100
+# Threshold for the TCP stream volume: if the volume is greater than this value, a rule will be
+# installed to forward the TCP stream directly bypassing the controller. Value is in bytes.
+TCP_STREAM_VOLUME_THRESHOLD = 500000
+# Timeout for the TCP forwarding rules: if the connection is not used for this amount of time, it
+# will be removed from the switch or from the controller. Value is in seconds.
+TCP_CONNECTION_TIMEOUT = 20
+
+
 class MessageFactory:
     """Class used to generate FlowMod messages to be sent to the switches."""
 
@@ -199,9 +209,11 @@ class MessageFactory:
         # Rule: build the FlowMod message ready to be sent to the switch.
         rule = ofparser.OFPFlowMod(
             datapath=switch,
-            priority=69,
+            priority=TCP_FORWARDING_RULE_PRIORITY,
             match=match,
             instructions=instructions,
+            # Timeout: the rule will expire after TCP_CONNECTION_TIMEOUT seconds of inactivity.
+            idle_timeout=TCP_CONNECTION_TIMEOUT,
         )
 
         return rule
@@ -441,78 +453,108 @@ class BabyElephantWalk(app_manager.RyuApp):
 
         # We know for sure that the packet is an IPv4 packet, it will also be a TCP packet?
         ip_in = pkt_in.get_protocol(ipv4.ipv4)
-        if ip_in.proto != 6:
-            # IPv4 protocol 6 is TCP, all other protocols can be ignored for our purposes.
-            pass
-        else:
-            # The packet is a TCP packet, let's parse it.
+        if ip_in.proto == 6:
+            # The traffic is a TCP packet, let's parse it.
             tcp_in = pkt_in.get_protocol(tcp.tcp)
+
             # Retrieve the connection from the ConnectionManager.
             tcp_conn = self._connection_manager.retrieve_connection(
                 ip_in.src, tcp_in.src_port, ip_in.dst, tcp_in.dst_port
             )
+
+            # If the connection is brand new, log it.
+            if tcp_conn.volume == 0:
+                self.logger.info(
+                    "packet_in: New TCP connection detected: %s:%s <-> %s:%s. "
+                    "Started monitoring it.",
+                    tcp_conn.ip_a,
+                    tcp_conn.port_a,
+                    tcp_conn.ip_b,
+                    tcp_conn.port_b,
+                )
+
             # Update the volume of the connection.
             tcp_conn.volume += len(pkt_in.data)
-            # TODO: Evrything from this point on is a POC!!
-            # Log the connection.
-            self.logger.info("packet_in: %s", tcp_conn)
-            if tcp_conn.volume > 100000:
-                # Install a rule to forward the TCP stream.
-                host_a_mac, host_a_ip, host_a_port = (
+
+            # If the volume of the connection is greater than the threshold, we can install a rule
+            # to forward the TCP stream directly bypassing the controller.
+            if tcp_conn.volume >= TCP_STREAM_VOLUME_THRESHOLD:
+                # Convention: Enpoint A is the host that has sent the current packet while
+                # Endpoint B is the host will receive it. Most of the variables here are redundant
+                # but the are kept for clarity.
+                endp_a_mac, endp_a_ip, endp_a_port = (
                     eth_in.src,
                     ip_in.src,
                     tcp_in.src_port,
                 )
-                host_b_mac, host_b_ip, host_b_port = (
+                endp_b_mac, endp_b_ip, endp_b_port = (
                     eth_in.dst,
                     ip_in.dst,
                     tcp_in.dst_port,
                 )
 
-                # Rule for traffic A -> B
-                output_port_a_b = self._network_topology.find_output_port(
-                    switch, host_b_mac
+                # Upstream traffic: A -> B
+                a_to_b_phy_port = self._network_topology.find_output_port(
+                    switch, endp_b_mac
                 )
-                if output_port_a_b is not None:
-                    fm_rule_a_b = (
+                if a_to_b_phy_port is not None:
+                    fm_rule_a_to_b = (
                         self._message_factory.forward_tcp_stream_configuration(
                             switch,
-                            host_a_ip,
-                            host_a_port,
-                            host_b_ip,
-                            host_b_port,
-                            output_port_a_b,
+                            endp_a_ip,
+                            endp_a_port,
+                            endp_b_ip,
+                            endp_b_port,
+                            a_to_b_phy_port,
                         )
                     )
-                    switch.send_msg(fm_rule_a_b)
+                    switch.send_msg(fm_rule_a_to_b)
+                    self.logger.info(
+                        "packet_in: Rule installed for %s:%s -> %s:%s traffic on switch %s.",
+                        endp_a_ip,
+                        endp_a_port,
+                        endp_b_ip,
+                        endp_b_port,
+                        switch.id,
+                    )
                 else:
                     self.logger.warning(
                         "packet_in: Unable to find a route from switch %s to host %s. "
-                        "Not installing rule!!!",
+                        "Not installing forwarding rule!",
                         switch.id,
-                        host_b_mac,
+                        endp_b_mac,
                     )
+                    return
 
-                # Rule for traffic B -> A
-                output_port_b_a = self._network_topology.find_output_port(
-                    switch, host_a_mac
+                # Downstream traffic: B -> A
+                b_to_a_phy_port = self._network_topology.find_output_port(
+                    switch, endp_a_mac
                 )
-                if output_port_b_a is not None:
-                    fm_rule_b_a = (
+                if b_to_a_phy_port is not None:
+                    fm_rule_b_to_a = (
                         self._message_factory.forward_tcp_stream_configuration(
                             switch,
-                            host_b_ip,
-                            host_b_port,
-                            host_a_ip,
-                            host_a_port,
-                            output_port_b_a,
+                            endp_b_ip,
+                            endp_b_port,
+                            endp_a_ip,
+                            endp_a_port,
+                            b_to_a_phy_port,
                         )
                     )
-                    switch.send_msg(fm_rule_b_a)
+                    switch.send_msg(fm_rule_b_to_a)
+                    self.logger.info(
+                        "packet_in: Rule installed for %s:%s -> %s:%s traffic on switch %s.",
+                        endp_b_ip,
+                        endp_b_port,
+                        endp_a_ip,
+                        endp_a_port,
+                        switch.id,
+                    )
                 else:
                     self.logger.warning(
                         "packet_in: Unable to find a route from switch %s to host %s. "
-                        "Not installing rule!!!",
+                        "Not installing forwarding rule!",
                         switch.id,
-                        host_a_mac,
+                        endp_a_mac,
                     )
+                    return
