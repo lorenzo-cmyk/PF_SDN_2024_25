@@ -307,6 +307,7 @@ class ConnectionManager:
             self.ip_b = ip_b
             self.port_b = port_b
             self.volume = 0
+            self.ovs_accel_switches = []
 
     def __init__(self):
         """Initializes the ConnectionManager with an empty list of connections."""
@@ -479,6 +480,21 @@ class BabyElephantWalk(app_manager.RyuApp):
             # If the volume of the connection is greater than the threshold, we can install a rule
             # to forward the TCP stream directly bypassing the controller.
             if tcp_conn.volume >= TCP_STREAM_VOLUME_THRESHOLD:
+                # If the connection is already directly forwarded by the switch we don't need to do
+                # anything.
+                if switch.id in tcp_conn.ovs_accel_switches:
+                    # pylint: disable=logging-too-many-args
+                    self.logger.debug(
+                        "packet_in: OpenFlow rule for forwarding traffic between %s:%s <-> %s:%s "
+                        "is being installed on switch %s. Forwarding manually in the meantime.",
+                        tcp_conn.ip_a,
+                        tcp_conn.port_a,
+                        tcp_conn.ip_b,
+                        tcp_conn.port_b,
+                        switch.id,
+                    )
+                    return
+
                 # Convention: Enpoint A is the host that has sent the current packet while
                 # Endpoint B is the host will receive it. Most of the variables here are redundant
                 # but the are kept for clarity.
@@ -558,3 +574,6 @@ class BabyElephantWalk(app_manager.RyuApp):
                         endp_a_mac,
                     )
                     return
+
+                # Add the switch to the list of switches that are forwarding the TCP stream
+                tcp_conn.ovs_accel_switches.append(switch.id)
