@@ -513,67 +513,70 @@ class BabyElephantWalk(app_manager.RyuApp):
                 a_to_b_phy_port = self._network_topology.find_output_port(
                     switch, endp_b_mac
                 )
-                if a_to_b_phy_port is not None:
-                    fm_rule_a_to_b = (
-                        self._message_factory.forward_tcp_stream_configuration(
-                            switch,
-                            endp_a_ip,
-                            endp_a_port,
-                            endp_b_ip,
-                            endp_b_port,
-                            a_to_b_phy_port,
-                        )
-                    )
-                    switch.send_msg(fm_rule_a_to_b)
-                    self.logger.info(
-                        "packet_in: Rule installed for %s:%s -> %s:%s traffic on switch %s.",
-                        endp_a_ip,
-                        endp_a_port,
-                        endp_b_ip,
-                        endp_b_port,
-                        switch.id,
-                    )
-                else:
+                # If we are unable to find a route to the destination MAC address abort the rule
+                # installation.
+                if a_to_b_phy_port is None:
                     self.logger.warning(
                         "packet_in: Unable to find a route from switch %s to host %s. "
-                        "Not installing forwarding rule!",
+                        "Aborting forwarding rule installation!",
                         switch.id,
                         endp_b_mac,
                     )
                     return
+                # Build the relative FlowMod message to be sent to the switch.
+                fm_rule_a_to_b = self._message_factory.forward_tcp_stream_configuration(
+                    switch,
+                    endp_a_ip,
+                    endp_a_port,
+                    endp_b_ip,
+                    endp_b_port,
+                    a_to_b_phy_port,
+                )
 
                 # Downstream traffic: B -> A
                 b_to_a_phy_port = self._network_topology.find_output_port(
                     switch, endp_a_mac
                 )
-                if b_to_a_phy_port is not None:
-                    fm_rule_b_to_a = (
-                        self._message_factory.forward_tcp_stream_configuration(
-                            switch,
-                            endp_b_ip,
-                            endp_b_port,
-                            endp_a_ip,
-                            endp_a_port,
-                            b_to_a_phy_port,
-                        )
-                    )
-                    switch.send_msg(fm_rule_b_to_a)
-                    self.logger.info(
-                        "packet_in: Rule installed for %s:%s -> %s:%s traffic on switch %s.",
-                        endp_b_ip,
-                        endp_b_port,
-                        endp_a_ip,
-                        endp_a_port,
-                        switch.id,
-                    )
-                else:
+                # If we are unable to find a route to the destination MAC address abort the rule
+                # installation.
+                if b_to_a_phy_port is None:
                     self.logger.warning(
                         "packet_in: Unable to find a route from switch %s to host %s. "
-                        "Not installing forwarding rule!",
+                        "Aborting forwarding rule installation!",
                         switch.id,
                         endp_a_mac,
                     )
                     return
+                # Build the relative FlowMod message to be sent to the switch.
+                fm_rule_b_to_a = self._message_factory.forward_tcp_stream_configuration(
+                    switch,
+                    endp_b_ip,
+                    endp_b_port,
+                    endp_a_ip,
+                    endp_a_port,
+                    b_to_a_phy_port,
+                )
+
+                # Send the FlowMod messages to the switch.
+                switch.send_msg(fm_rule_a_to_b)
+                self.logger.info(
+                    "packet_in: Rule installed for %s:%s -> %s:%s traffic on switch %s.",
+                    endp_a_ip,
+                    endp_a_port,
+                    endp_b_ip,
+                    endp_b_port,
+                    switch.id,
+                )
+
+                switch.send_msg(fm_rule_b_to_a)
+                self.logger.info(
+                    "packet_in: Rule installed for %s:%s -> %s:%s traffic on switch %s.",
+                    endp_b_ip,
+                    endp_b_port,
+                    endp_a_ip,
+                    endp_a_port,
+                    switch.id,
+                )
 
                 # Add the switch to the list of switches that are forwarding the TCP stream
                 tcp_conn.ovs_accel_switches.append(switch.id)
