@@ -22,12 +22,11 @@ TCP_CONNECTION_TIMEOUT = 20
 class MessageFactory:
     """Class used to generate OpenFlow messages (FlowMod, PacketOut) to be sent to the switches."""
 
-    def __init__(self, app):
-        """Initializes the MessageFactory with the Ryu application instance.
-        :param app: The Ryu application instance.
+    def __init__(self, network_topology):
+        """Initializes the MessageFactory with a NetworkTopology class instance.
+        :param network_topology: The NetworkTopology instance itself.
         """
-        # Store the Ryu application instance.
-        self._app = app
+        self._network_topology = network_topology
 
     def default_configuration(self, switch):
         """
@@ -66,10 +65,10 @@ class MessageFactory:
 
     def arp_proxy(self, arp_req):
         """
-        Generates a PacketOut message to reply to an ARP request with the MAC address of the host
-        that has the IP address specified in the ARP request.
+        Generates a PacketOut message able to reply to an ARP request, de-facto acting as a proxy.
         :param arp_req: The ARP request packet received by the controller.
-        :return: The PacketOut message to be sent to the switch.
+        :return: The PacketOut message to be sent to the switch. If the host is not found, None is
+                 returned.
         """
         # Retrieve the OpenFlow protocol object and relative parser from the switch.
         # The switch itself is extracted from the ARP request.
@@ -88,15 +87,8 @@ class MessageFactory:
             return None
 
         # Finds the MAC address of the host that has the IP address specified in the ARP request.
-        # If the host is not found, the function returns without doing anything.
-        target_mac_address = next(
-            (
-                host.mac
-                for host in get_all_host(self._app)
-                if arp_in.dst_ip in host.ipv4
-            ),
-            None,
-        )
+        # If the host is not found, return None.
+        target_mac_address = self._network_topology.find_mac_addr_by_host_ip(arp_in.dst_ip)
         if target_mac_address is None:
             return None
 
@@ -225,7 +217,6 @@ class NetworkTopology:
         """Initializes the NetworkTopology with the Ryu application instance.
         :param app: The Ryu application instance.
         """
-        # Store the Ryu application instance.
         self._app = app
 
     def __find_switch_by_host_mac(self, dst_mac):
@@ -242,6 +233,17 @@ class NetworkTopology:
             if found_host
             else (None, None)
         )
+    
+    def find_mac_addr_by_host_ip(self, host_ip):
+        """
+        Finds the MAC address of the host with the specified IP address.
+        :param host_ip: The IP address of the host to be found.
+        :return: The MAC address of the host.
+        """
+        found_host = next(
+            (host for host in get_all_host(self._app) if host_ip in host.ipv4), None
+        )
+        return found_host.mac if found_host else None
 
     def __find_next_hop_port(self, src_switch_id, dst_switch_id):
         """
@@ -359,11 +361,11 @@ class BabyElephantWalk(app_manager.RyuApp):
         :param kwargs: The keyword arguments to be passed to the Ryu application.
         """
         super().__init__(*args, **kwargs)
-        # Initialize the MessageFactory with the Ryu application instance.
-        self._message_factory = MessageFactory(self)
         # Initialize the NetworkTopology with the Ryu application instance.
         self._network_topology = NetworkTopology(self)
-        # Initialize the ConnectionManager with the Ryu application instance.
+        # Initialize the MessageFactory with the NetworkTopology instance.
+        self._message_factory = MessageFactory(self._network_topology)
+        # Initialize a new ConnectionManager instance.
         self._connection_manager = ConnectionManager()
         # Log the initialization of the application.
         self.logger.info("init: BabyElephantWalk application initialized!")
