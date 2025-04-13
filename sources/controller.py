@@ -484,7 +484,6 @@ class BabyElephantWalk(app_manager.RyuApp):
                 # If the connection is already directly forwarded by the switch we don't need to do
                 # anything.
                 if switch.id in tcp_conn.ovs_accel_switches:
-                    # pylint: disable=logging-too-many-args
                     self.logger.debug(
                         "packet_in: OpenFlow rule for forwarding traffic between %s:%s <-> %s:%s "
                         "is being installed on switch %s. Forwarding manually in the meantime.",
