@@ -249,7 +249,7 @@ class NetworkTopology:
         destination switch.
         :param src_switch_id: The ID of the source switch.
         :param dst_switch_id: The ID of the destination switch.
-        :return: The port number of the next hop switch.
+        :return: The port number on the source switch leading towards the next hop.
         """
         # Build the network model.
         model = nx.DiGraph()
