@@ -20,7 +20,7 @@ TCP_CONNECTION_TIMEOUT = 20
 
 
 class MessageFactory:
-    """Class used to generate FlowMod messages to be sent to the switches."""
+    """Class used to generate OpenFlow messages (FlowMod, PacketOut) to be sent to the switches."""
 
     def __init__(self, app):
         """Initializes the MessageFactory with the Ryu application instance.
@@ -66,11 +66,10 @@ class MessageFactory:
 
     def arp_proxy(self, arp_req):
         """
-        Generates a FlowMod message to reply to an ARP request with the MAC address of the host
+        Generates a PacketOut message to reply to an ARP request with the MAC address of the host
         that has the IP address specified in the ARP request.
-        :param app: The Ryu application instance.
         :param arp_req: The ARP request packet received by the controller.
-        :return: The FlowMod message to be sent to the switch.
+        :return: The PacketOut message to be sent to the switch.
         """
         # Retrieve the OpenFlow protocol object and relative parser from the switch.
         # The switch itself is extracted from the ARP request.
@@ -128,7 +127,7 @@ class MessageFactory:
         raw_out.add_protocol(arp_out)
         raw_out.serialize()
 
-        # Build the FlowMod message to inscruct the switch to send the ARP reply that we have just
+        # Build the PacketOut message to inscruct the switch to send the ARP reply that we have just
         # built.
         arp_reply = ofparser.OFPPacketOut(
             datapath=switch,
@@ -143,16 +142,16 @@ class MessageFactory:
 
     def forward_packet(self, switch, out_port, pkt):
         """
-        Generates a FlowMod message to forward the packet to the specified output port.
-        :param switch: The switch to which the FlowMod message will be sent.
+        Generates a PacketOut message to forward the packet to the specified output port.
+        :param switch: The switch to which the PacketOut message will be sent.
         :param out_port: The output port to which the packet will be forwarded.
         :param pkt: The packet to be forwarded.
-        :return: The FlowMod message to be sent to the switch.
+        :return: The PacketOut message to be sent to the switch.
         """
         # Retrive the OpenFlow parser object from the switch.
         ofparser = switch.ofproto_parser
 
-        # Build the FlowMod message to instruct the switch to forward the packet to the specified
+        # Build the PacketOut message to instruct the switch to forward the packet to the specified
         # output port.
         # Actions: just forward the packet to said port.
         actions = [ofparser.OFPActionOutput(out_port)]
