@@ -310,7 +310,7 @@ class ConnectionManager:
             self.ip_b = ip_b
             self.port_b = port_b
             self.volume = 0
-            self.ovs_accel_switches = []
+            self.ovs_accel_switches = {}
 
     def __init__(self):
         """Initializes the ConnectionManager with an empty list of connections."""
@@ -588,4 +588,4 @@ class BabyElephantWalk(app_manager.RyuApp):
                 )
 
                 # Add the switch to the list of switches that are forwarding the TCP stream
-                tcp_conn.ovs_accel_switches.append(switch.id)
+                tcp_conn.ovs_accel_switches.add(switch.id)
