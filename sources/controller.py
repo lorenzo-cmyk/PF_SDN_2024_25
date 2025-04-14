@@ -3,7 +3,7 @@
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import set_ev_cls, CONFIG_DISPATCHER, MAIN_DISPATCHER
-from ryu.ofproto import ofproto_v1_3
+from ryu.ofproto import ofproto_v1_3, inet
 from ryu.topology.api import get_all_link, get_all_host
 from ryu.lib.packet import packet, ethernet, ether_types, arp, ipv4, tcp
 import networkx as nx
@@ -13,7 +13,7 @@ import networkx as nx
 TCP_FORWARDING_RULE_PRIORITY = 100
 # Threshold for the TCP stream volume: if the volume is greater than this value, a rule will be
 # installed to forward the TCP stream directly bypassing the controller. Value is in bytes.
-TCP_STREAM_VOLUME_THRESHOLD = 25 * 1000 * 1000 # 25 MB
+TCP_STREAM_VOLUME_THRESHOLD = 25 * 1000 * 1000  # 25 MB
 # Timeout for the TCP forwarding rules: if the connection is not used for this amount of time, it
 # will be removed from the switch or from the controller. Value is in seconds.
 TCP_CONNECTION_TIMEOUT = 20
@@ -88,7 +88,9 @@ class MessageFactory:
 
         # Finds the MAC address of the host that has the IP address specified in the ARP request.
         # If the host is not found, return None.
-        target_mac_address = self._network_topology.find_mac_addr_by_host_ip(arp_in.dst_ip)
+        target_mac_address = self._network_topology.find_mac_addr_by_host_ip(
+            arp_in.dst_ip
+        )
         if target_mac_address is None:
             return None
 
@@ -186,7 +188,7 @@ class MessageFactory:
             eth_type=ether_types.ETH_TYPE_IP,
             ipv4_src=ip_scr,
             ipv4_dst=ip_dst,
-            ip_proto=6,  # IPv4 protocol 6 is TCP
+            ip_proto=inet.IPPROTO_TCP,
             tcp_src=port_src,
             tcp_dst=port_dst,
         )
@@ -233,7 +235,7 @@ class NetworkTopology:
             if found_host
             else (None, None)
         )
-    
+
     def find_mac_addr_by_host_ip(self, host_ip):
         """
         Finds the MAC address of the host with the specified IP address.
@@ -308,7 +310,7 @@ class ConnectionManager:
             self.ip_b = ip_b
             self.port_b = port_b
             self.volume = 0
-            self.ovs_accel_switches = []
+            self.ovs_accel_switches = set()
 
     def __init__(self):
         """Initializes the ConnectionManager with an empty list of connections."""
@@ -368,7 +370,7 @@ class BabyElephantWalk(app_manager.RyuApp):
         # Initialize a new ConnectionManager instance.
         self._connection_manager = ConnectionManager()
         # Log the initialization of the application.
-        self.logger.info("init: BabyElephantWalk application initialized!")
+        self.logger.info("init: BabyElephantWalk SDN application initialized.")
 
     # pylint: disable=no-member
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
@@ -382,7 +384,7 @@ class BabyElephantWalk(app_manager.RyuApp):
         switch.send_msg(self._message_factory.default_configuration(switch))
         # Log the connection of the switch.
         self.logger.info(
-            "switch_features: Switch %s connected. Default configuration has been sent.",
+            "switch_features: Switch %s connected, default configuration sent.",
             switch.id,
         )
 
@@ -408,6 +410,12 @@ class BabyElephantWalk(app_manager.RyuApp):
             fm_arp_reply = self._message_factory.arp_proxy(ofmessage)
             if fm_arp_reply is not None:
                 switch.send_msg(fm_arp_reply)
+                self.logger.info(
+                    "packet_in: ARP request received from %s for IP %s. "
+                    "Replied successfully.",
+                    eth_in.src,
+                    pkt_in.get_protocol(arp.arp).dst_ip,
+                )
             else:
                 self.logger.warning(
                     "packet_in: ARP request received from %s for IP %s. "
@@ -442,6 +450,7 @@ class BabyElephantWalk(app_manager.RyuApp):
                 switch, output_port, ofmessage
             )
             switch.send_msg(fm_pkt_forward)
+            # Deliberately NOT logging this event in order to avoid spamming the logs.
         else:
             # Unable to find a route to the destination MAC address. Dropping the packet.
             self.logger.warning(
@@ -455,7 +464,7 @@ class BabyElephantWalk(app_manager.RyuApp):
 
         # We know for sure that the packet is an IPv4 packet, it will also be a TCP packet?
         ip_in = pkt_in.get_protocol(ipv4.ipv4)
-        if ip_in.proto == 6:
+        if ip_in.proto == inet.IPPROTO_TCP:
             # The traffic is a TCP packet, let's parse it.
             tcp_in = pkt_in.get_protocol(tcp.tcp)
 
@@ -468,7 +477,7 @@ class BabyElephantWalk(app_manager.RyuApp):
             if tcp_conn.volume == 0:
                 self.logger.info(
                     "packet_in: New TCP connection detected: %s:%s <-> %s:%s. "
-                    "Started monitoring it.",
+                    "Monitoring started.",
                     tcp_conn.ip_a,
                     tcp_conn.port_a,
                     tcp_conn.ip_b,
@@ -518,7 +527,7 @@ class BabyElephantWalk(app_manager.RyuApp):
                 if a_to_b_phy_port is None:
                     self.logger.warning(
                         "packet_in: Unable to find a route from switch %s to host %s. "
-                        "Aborting forwarding rule installation!",
+                        "Aborting forwarding rule installation.",
                         switch.id,
                         endp_b_mac,
                     )
@@ -542,7 +551,7 @@ class BabyElephantWalk(app_manager.RyuApp):
                 if b_to_a_phy_port is None:
                     self.logger.warning(
                         "packet_in: Unable to find a route from switch %s to host %s. "
-                        "Aborting forwarding rule installation!",
+                        "Aborting forwarding rule installation.",
                         switch.id,
                         endp_a_mac,
                     )
@@ -579,4 +588,4 @@ class BabyElephantWalk(app_manager.RyuApp):
                 )
 
                 # Add the switch to the list of switches that are forwarding the TCP stream
-                tcp_conn.ovs_accel_switches.append(switch.id)
+                tcp_conn.ovs_accel_switches.add(switch.id)
