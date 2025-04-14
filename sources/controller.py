@@ -13,7 +13,7 @@ import networkx as nx
 TCP_FORWARDING_RULE_PRIORITY = 100
 # Threshold for the TCP stream volume: if the volume is greater than this value, a rule will be
 # installed to forward the TCP stream directly bypassing the controller. Value is in bytes.
-TCP_STREAM_VOLUME_THRESHOLD = 25 * 1000 * 1000 # 25 MB
+TCP_STREAM_VOLUME_THRESHOLD = 25 * 1000 * 1000  # 25 MB
 # Timeout for the TCP forwarding rules: if the connection is not used for this amount of time, it
 # will be removed from the switch or from the controller. Value is in seconds.
 TCP_CONNECTION_TIMEOUT = 20
@@ -88,7 +88,9 @@ class MessageFactory:
 
         # Finds the MAC address of the host that has the IP address specified in the ARP request.
         # If the host is not found, return None.
-        target_mac_address = self._network_topology.find_mac_addr_by_host_ip(arp_in.dst_ip)
+        target_mac_address = self._network_topology.find_mac_addr_by_host_ip(
+            arp_in.dst_ip
+        )
         if target_mac_address is None:
             return None
 
