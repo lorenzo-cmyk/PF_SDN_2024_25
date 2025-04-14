@@ -3,7 +3,7 @@
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import set_ev_cls, CONFIG_DISPATCHER, MAIN_DISPATCHER
-from ryu.ofproto import ofproto_v1_3
+from ryu.ofproto import ofproto_v1_3, inet
 from ryu.topology.api import get_all_link, get_all_host
 from ryu.lib.packet import packet, ethernet, ether_types, arp, ipv4, tcp
 import networkx as nx
@@ -188,7 +188,7 @@ class MessageFactory:
             eth_type=ether_types.ETH_TYPE_IP,
             ipv4_src=ip_scr,
             ipv4_dst=ip_dst,
-            ip_proto=6,  # IPv4 protocol 6 is TCP
+            ip_proto=inet.IPPROTO_TCP,
             tcp_src=port_src,
             tcp_dst=port_dst,
         )
@@ -464,7 +464,7 @@ class BabyElephantWalk(app_manager.RyuApp):
 
         # We know for sure that the packet is an IPv4 packet, it will also be a TCP packet?
         ip_in = pkt_in.get_protocol(ipv4.ipv4)
-        if ip_in.proto == 6:
+        if ip_in.proto == inet.IPPROTO_TCP:
             # The traffic is a TCP packet, let's parse it.
             tcp_in = pkt_in.get_protocol(tcp.tcp)
 
