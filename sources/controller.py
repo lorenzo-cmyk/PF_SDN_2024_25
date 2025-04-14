@@ -310,7 +310,7 @@ class ConnectionManager:
             self.ip_b = ip_b
             self.port_b = port_b
             self.volume = 0
-            self.ovs_accel_switches = {}
+            self.ovs_accel_switches = set()
 
     def __init__(self):
         """Initializes the ConnectionManager with an empty list of connections."""
