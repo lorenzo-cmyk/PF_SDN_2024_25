@@ -233,7 +233,7 @@ class NetworkTopology:
             if found_host
             else (None, None)
         )
-    
+
     def find_mac_addr_by_host_ip(self, host_ip):
         """
         Finds the MAC address of the host with the specified IP address.
@@ -368,7 +368,7 @@ class BabyElephantWalk(app_manager.RyuApp):
         # Initialize a new ConnectionManager instance.
         self._connection_manager = ConnectionManager()
         # Log the initialization of the application.
-        self.logger.info("init: BabyElephantWalk application initialized!")
+        self.logger.info("init: BabyElephantWalk SDN application initialized.")
 
     # pylint: disable=no-member
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
@@ -382,7 +382,7 @@ class BabyElephantWalk(app_manager.RyuApp):
         switch.send_msg(self._message_factory.default_configuration(switch))
         # Log the connection of the switch.
         self.logger.info(
-            "switch_features: Switch %s connected. Default configuration has been sent.",
+            "switch_features: Switch %s connected, default configuration sent.",
             switch.id,
         )
 
@@ -408,6 +408,12 @@ class BabyElephantWalk(app_manager.RyuApp):
             fm_arp_reply = self._message_factory.arp_proxy(ofmessage)
             if fm_arp_reply is not None:
                 switch.send_msg(fm_arp_reply)
+                self.logger.info(
+                    "packet_in: ARP request received from %s for IP %s. "
+                    "Replied successfully.",
+                    eth_in.src,
+                    pkt_in.get_protocol(arp.arp).dst_ip,
+                )
             else:
                 self.logger.warning(
                     "packet_in: ARP request received from %s for IP %s. "
@@ -442,6 +448,7 @@ class BabyElephantWalk(app_manager.RyuApp):
                 switch, output_port, ofmessage
             )
             switch.send_msg(fm_pkt_forward)
+            # Deliberately NOT logging this event in order to avoid spamming the logs.
         else:
             # Unable to find a route to the destination MAC address. Dropping the packet.
             self.logger.warning(
@@ -468,7 +475,7 @@ class BabyElephantWalk(app_manager.RyuApp):
             if tcp_conn.volume == 0:
                 self.logger.info(
                     "packet_in: New TCP connection detected: %s:%s <-> %s:%s. "
-                    "Started monitoring it.",
+                    "Monitoring started.",
                     tcp_conn.ip_a,
                     tcp_conn.port_a,
                     tcp_conn.ip_b,
@@ -518,7 +525,7 @@ class BabyElephantWalk(app_manager.RyuApp):
                 if a_to_b_phy_port is None:
                     self.logger.warning(
                         "packet_in: Unable to find a route from switch %s to host %s. "
-                        "Aborting forwarding rule installation!",
+                        "Aborting forwarding rule installation.",
                         switch.id,
                         endp_b_mac,
                     )
@@ -542,7 +549,7 @@ class BabyElephantWalk(app_manager.RyuApp):
                 if b_to_a_phy_port is None:
                     self.logger.warning(
                         "packet_in: Unable to find a route from switch %s to host %s. "
-                        "Aborting forwarding rule installation!",
+                        "Aborting forwarding rule installation.",
                         switch.id,
                         endp_a_mac,
                     )
