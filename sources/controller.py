@@ -371,6 +371,7 @@ class ConnectionManager:
             self.port_b = port_b
             self.volume = 0
             self.ovs_accel_switches = set()
+            self.designated_counting_switch = None
 
     def __init__(self):
         """Initializes the ConnectionManager with an empty list of connections."""
@@ -596,9 +597,13 @@ class BabyElephantWalk(app_manager.RyuApp):
                     tcp_conn.ip_b,
                     tcp_conn.port_b,
                 )
+                tcp_conn.designated_counting_switch = switch.id
 
             # Update the volume of the connection.
-            tcp_conn.volume += len(pkt_in.data)
+            if tcp_conn.designated_counting_switch == switch.id:
+                # If the connection is being monitored by the current switch, update the volume.
+                # This is done to avoid counting the traffic multiple times.
+                tcp_conn.volume += ip_in.total_length
 
             # If the volume of the connection is greater than the threshold, we can install a rule
             # to forward the TCP stream directly bypassing the controller.
