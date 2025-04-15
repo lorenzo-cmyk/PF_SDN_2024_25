@@ -22,12 +22,6 @@ TCP_CONNECTION_TIMEOUT = 20
 class MessageFactory:
     """Class used to generate OpenFlow messages (FlowMod, PacketOut) to be sent to the switches."""
 
-    def __init__(self, network_topology):
-        """Initializes the MessageFactory with a NetworkTopology class instance.
-        :param network_topology: The NetworkTopology instance itself.
-        """
-        self._network_topology = network_topology
-
     def default_configuration(self, switch):
         """
         Generates a FlowMod message to configure the switch to send all packets to the controller.
@@ -63,7 +57,7 @@ class MessageFactory:
 
         return rule
 
-    def arp_proxy(self, arp_req):
+    def arp_proxy(self, arp_req, mac_dst):
         """
         Generates a PacketOut message able to reply to an ARP request, de-facto acting as a proxy.
         :param arp_req: The ARP request packet received by the controller.
@@ -86,14 +80,6 @@ class MessageFactory:
         if arp_in.opcode != arp.ARP_REQUEST:
             return None
 
-        # Finds the MAC address of the host that has the IP address specified in the ARP request.
-        # If the host is not found, return None.
-        target_mac_address = self._network_topology.find_mac_addr_by_host_ip(
-            arp_in.dst_ip
-        )
-        if target_mac_address is None:
-            return None
-
         # Starts building the ARP reply packet.
         raw_out = packet.Packet()
         # External Ethernet header: the destination MAC address is the source MAC address of the
@@ -101,7 +87,7 @@ class MessageFactory:
         # address specified in the ARP request.
         eth_out = ethernet.ethernet(
             dst=eth_in.src,
-            src=target_mac_address,
+            src=mac_dst,
             # Ethernet type: ARP
             ethertype=ether_types.ETH_TYPE_ARP,
         )
@@ -112,7 +98,7 @@ class MessageFactory:
         # the ARP request.
         arp_out = arp.arp(
             opcode=arp.ARP_REPLY,
-            src_mac=target_mac_address,
+            src_mac=mac_dst,
             src_ip=arp_in.dst_ip,
             dst_mac=arp_in.src_mac,
             dst_ip=arp_in.src_ip,
@@ -426,8 +412,8 @@ class BabyElephantWalk(app_manager.RyuApp):
         super().__init__(*args, **kwargs)
         # Initialize a new NetworkTopology instance.
         self._network_topology = NetworkTopology()
-        # Initialize the MessageFactory with the NetworkTopology instance.
-        self._message_factory = MessageFactory(self._network_topology)
+        # Initialize a new MessageFactory instance.
+        self._message_factory = MessageFactory()
         # Initialize a new ConnectionManager instance.
         self._connection_manager = ConnectionManager()
         # Log the initialization of the application.
@@ -521,21 +507,27 @@ class BabyElephantWalk(app_manager.RyuApp):
 
         # If the packet is an ARP request act as a proxy and reply to it.
         if eth_in.ethertype == ether_types.ETH_TYPE_ARP:
-            fm_arp_reply = self._message_factory.arp_proxy(ofmessage)
-            if fm_arp_reply is not None:
+            # Get the MAC address of the host specified in the ARP request by its IP address.
+            ip_dst = pkt_in.get_protocol(arp.arp).dst_ip
+            mac_dst = self._network_topology.find_mac_addr_by_host_ip(ip_dst)
+            # Ensure that we have a valid MAC address.
+            if mac_dst is not None:
+                # Build the PacketOut message to reply to the ARP request and send it to the switch.
+                fm_arp_reply = self._message_factory.arp_proxy(ofmessage, mac_dst)
                 switch.send_msg(fm_arp_reply)
                 self.logger.info(
                     "packet_in: ARP request received from %s for IP %s. "
-                    "Replied successfully.",
+                    "Host found, replying with MAC %s.",
                     eth_in.src,
-                    pkt_in.get_protocol(arp.arp).dst_ip,
+                    ip_dst,
+                    mac_dst,
                 )
             else:
                 self.logger.warning(
                     "packet_in: ARP request received from %s for IP %s. "
                     "Unable to reply: host not known.",
                     eth_in.src,
-                    pkt_in.get_protocol(arp.arp).dst_ip,
+                    ip_dst,
                 )
             return
 
