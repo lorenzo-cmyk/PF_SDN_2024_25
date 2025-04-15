@@ -251,7 +251,14 @@ class NetworkTopology:
         :return: The port number on the source switch leading towards the next hop.
         """
         # Find the shortest path between the source and destination switches.
-        path = nx.shortest_path(self._network_model, src_switch_id, dst_switch_id)
+        try:
+            path = nx.shortest_path(self._network_model, src_switch_id, dst_switch_id)
+        except nx.NetworkXNoPath:
+            # No path found between the source and destination switches.
+            return None
+        except nx.NodeNotFound:
+            # One of the switches is not present in the network model.
+            return None
 
         # Get the first link in the path.
         first_link = self._network_model[path[0]][path[1]]
