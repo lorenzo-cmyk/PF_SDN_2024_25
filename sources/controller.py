@@ -4,7 +4,7 @@ from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import set_ev_cls, CONFIG_DISPATCHER, MAIN_DISPATCHER
 from ryu.ofproto import ofproto_v1_3, inet
-from ryu.topology.api import get_all_link, get_all_host
+from ryu.topology.api import get_all_link, get_all_host, event
 from ryu.lib.packet import packet, ethernet, ether_types, arp, ipv4, tcp
 import networkx as nx
 
@@ -21,12 +21,6 @@ TCP_CONNECTION_TIMEOUT = 20
 
 class MessageFactory:
     """Class used to generate OpenFlow messages (FlowMod, PacketOut) to be sent to the switches."""
-
-    def __init__(self, network_topology):
-        """Initializes the MessageFactory with a NetworkTopology class instance.
-        :param network_topology: The NetworkTopology instance itself.
-        """
-        self._network_topology = network_topology
 
     def default_configuration(self, switch):
         """
@@ -63,7 +57,7 @@ class MessageFactory:
 
         return rule
 
-    def arp_proxy(self, arp_req):
+    def arp_proxy(self, arp_req, mac_dst):
         """
         Generates a PacketOut message able to reply to an ARP request, de-facto acting as a proxy.
         :param arp_req: The ARP request packet received by the controller.
@@ -86,14 +80,6 @@ class MessageFactory:
         if arp_in.opcode != arp.ARP_REQUEST:
             return None
 
-        # Finds the MAC address of the host that has the IP address specified in the ARP request.
-        # If the host is not found, return None.
-        target_mac_address = self._network_topology.find_mac_addr_by_host_ip(
-            arp_in.dst_ip
-        )
-        if target_mac_address is None:
-            return None
-
         # Starts building the ARP reply packet.
         raw_out = packet.Packet()
         # External Ethernet header: the destination MAC address is the source MAC address of the
@@ -101,7 +87,7 @@ class MessageFactory:
         # address specified in the ARP request.
         eth_out = ethernet.ethernet(
             dst=eth_in.src,
-            src=target_mac_address,
+            src=mac_dst,
             # Ethernet type: ARP
             ethertype=ether_types.ETH_TYPE_ARP,
         )
@@ -112,7 +98,7 @@ class MessageFactory:
         # the ARP request.
         arp_out = arp.arp(
             opcode=arp.ARP_REPLY,
-            src_mac=target_mac_address,
+            src_mac=mac_dst,
             src_ip=arp_in.dst_ip,
             dst_mac=arp_in.src_mac,
             dst_ip=arp_in.src_ip,
@@ -215,11 +201,10 @@ class MessageFactory:
 class NetworkTopology:
     """Class used to represent the network topology."""
 
-    def __init__(self, app):
-        """Initializes the NetworkTopology with the Ryu application instance.
-        :param app: The Ryu application instance.
-        """
-        self._app = app
+    def __init__(self):
+        """Initializes the NetworkTopology with an empty network model."""
+        self._network_model = nx.DiGraph()
+        self._hosts = []
 
     def __find_switch_by_host_mac(self, dst_mac):
         """
@@ -227,9 +212,7 @@ class NetworkTopology:
         :param dst_mac: The MAC address of the host to be found.
         :return: The switch ID that has the host connected to it and the port number of the host.
         """
-        found_host = next(
-            (host for host in get_all_host(self._app) if host.mac == dst_mac), None
-        )
+        found_host = next((host for host in self._hosts if host.mac == dst_mac), None)
         return (
             (found_host.port.dpid, found_host.port.port_no)
             if found_host
@@ -242,9 +225,7 @@ class NetworkTopology:
         :param host_ip: The IP address of the host to be found.
         :return: The MAC address of the host.
         """
-        found_host = next(
-            (host for host in get_all_host(self._app) if host_ip in host.ipv4), None
-        )
+        found_host = next((host for host in self._hosts if host_ip in host.ipv4), None)
         return found_host.mac if found_host else None
 
     def __find_next_hop_port(self, src_switch_id, dst_switch_id):
@@ -255,16 +236,18 @@ class NetworkTopology:
         :param dst_switch_id: The ID of the destination switch.
         :return: The port number on the source switch leading towards the next hop.
         """
-        # Build the network model.
-        model = nx.DiGraph()
-        for link in get_all_link(self._app):
-            model.add_edge(link.src.dpid, link.dst.dpid, port=link.src.port_no)
-
         # Find the shortest path between the source and destination switches.
-        path = nx.shortest_path(model, src_switch_id, dst_switch_id)
+        try:
+            path = nx.shortest_path(self._network_model, src_switch_id, dst_switch_id)
+        except nx.NetworkXNoPath:
+            # No path found between the source and destination switches.
+            return None
+        except nx.NodeNotFound:
+            # One of the switches is not present in the network model.
+            return None
 
         # Get the first link in the path.
-        first_link = model[path[0]][path[1]]
+        first_link = self._network_model[path[0]][path[1]]
         # Return the port number of the first link.
         return first_link["port"]
 
@@ -291,6 +274,69 @@ class NetworkTopology:
         # Otherwise, find the next hop port in the path to the destination switch.
         return self.__find_next_hop_port(src_switch.id, dst_switch_id)
 
+    def update_topology_links(self, links):
+        """
+        Updates the network topology with the specified links.
+        :param links: The list of links to be added to the network topology.
+        :return: True, if the update was successful. False, otherwise.
+        """
+        # First, the provided link list cannot be empty. If it is empty, the update is rejected.
+        if len(links) == 0:
+            return False
+
+        # Second, all the already known links must be present (as-is) in the provided list. If not,
+        # the update cannot be accepted.
+
+        # Build a new network model based on the provided links.
+        network_model = nx.DiGraph()
+        for link in links:
+            network_model.add_edge(link.src.dpid, link.dst.dpid, port=link.src.port_no)
+
+        # Check if the new network model is a superset of the current one. We should focus on
+        # checking the nodes and edges only, not the attributes.
+        if set(self._network_model.nodes).issubset(set(network_model.nodes)) and set(
+            self._network_model.edges
+        ).issubset(set(network_model.edges)):
+            self._network_model = network_model
+            return True
+
+        return False
+
+    def update_topology_hosts(self, hosts):
+        """
+        Updates the network topology with the specified hosts.
+        :param hosts: The list of hosts to be added to the network topology.
+        :return: True, if the update was successful. False, otherwise.
+        """
+        # First, the provided host list cannot be empty. If it is empty, the update is rejected.
+        if len(hosts) == 0:
+            print(0)
+            return False
+
+        # Second, all the already known hosts must be present (as-is) in the provided list. If not,
+        # the update cannot be accepted.
+
+        for old_host in self._hosts:
+            # We need to check that the host is present and that the MAC address, dpid and port are
+            # still the same, otherwise the update is rejected.
+
+            # Check first if the host is present.
+            new_host = next((host for host in hosts if host.mac == old_host.mac), None)
+            if new_host is None:
+                return False
+
+            # Check now if the dpid and port are still the same.
+            if (
+                new_host.port.dpid != old_host.port.dpid
+                or new_host.port.port_no != old_host.port.port_no
+            ):
+                return False
+
+        # If the update is accepted, update the network topology with the new hosts.
+        self._hosts = hosts
+
+        return True
+
 
 class ConnectionManager:
     """Class used to manage TCP connections between hosts."""
@@ -311,6 +357,7 @@ class ConnectionManager:
             self.port_b = port_b
             self.volume = 0
             self.ovs_accel_switches = set()
+            self.designated_counting_switch = None
 
     def __init__(self):
         """Initializes the ConnectionManager with an empty list of connections."""
@@ -363,14 +410,67 @@ class BabyElephantWalk(app_manager.RyuApp):
         :param kwargs: The keyword arguments to be passed to the Ryu application.
         """
         super().__init__(*args, **kwargs)
-        # Initialize the NetworkTopology with the Ryu application instance.
-        self._network_topology = NetworkTopology(self)
-        # Initialize the MessageFactory with the NetworkTopology instance.
-        self._message_factory = MessageFactory(self._network_topology)
+        # Initialize a new NetworkTopology instance.
+        self._network_topology = NetworkTopology()
+        # Initialize a new MessageFactory instance.
+        self._message_factory = MessageFactory()
         # Initialize a new ConnectionManager instance.
         self._connection_manager = ConnectionManager()
         # Log the initialization of the application.
         self.logger.info("init: BabyElephantWalk SDN application initialized.")
+
+    # If needed, also EventSwitchEnter/EventSwitchLeave/EventSwitchReconnected could be used to
+    # track a variation in the network topology. This is not done now because we assume that a
+    # variation of the switches also implies a variation of the links. Edge case: a single switch
+    # without any link is connected to the controller.
+    # pylint: disable=unused-argument
+    @set_ev_cls(event.EventLinkAdd, CONFIG_DISPATCHER)
+    @set_ev_cls(event.EventLinkDelete, CONFIG_DISPATCHER)
+    def handle_link_update(self, ev):
+        """Handler for the "Link Update" event.
+        This event should be triggered when a link is added/removed from the network topology.
+        """
+        # Asks Ryu to retrieve all the links present in the network.
+        links = get_all_link(self)
+        # Asks NetworkTopology to update the network topology with the new links.
+        result = self._network_topology.update_topology_links(links)
+        # Log the outcome of the update.
+        if result:
+            self.logger.info(
+                "link_update: Network topology update accepted: "
+                "Ryu has found %s valid links.",
+                len(links),
+            )
+        else:
+            self.logger.warning(
+                "link_update: Network topology update rejected: "
+                "Ryu has provided an invalid topology."
+            )
+
+    # As per documentation, EventHostDelete is ignored due to being not implemented correctly.
+    # pylint: disable=unused-argument
+    @set_ev_cls(event.EventHostAdd, CONFIG_DISPATCHER)
+    @set_ev_cls(event.EventHostMove, CONFIG_DISPATCHER)
+    def handle_host_update(self, ev):
+        """Handler for the "Host Update" event.
+        This event should be triggered when a host is added/removed from the network topology.
+        """
+        # Asks Ryu to retrieve all the hosts present in the network.
+        hosts = get_all_host(self)
+        # Asks NetworkTopology to update the network topology with the new hosts.
+        result = self._network_topology.update_topology_hosts(hosts)
+        # Log the outcome of the update.
+        if result:
+            self.logger.info(
+                "host_update: Network topology update accepted: "
+                "Ryu has found %s valid hosts.",
+                len(hosts),
+            )
+        else:
+            self.logger.warning(
+                "host_update: Network topology update rejected: "
+                "Ryu has provided an invalid topology."
+            )
 
     # pylint: disable=no-member
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
@@ -407,21 +507,27 @@ class BabyElephantWalk(app_manager.RyuApp):
 
         # If the packet is an ARP request act as a proxy and reply to it.
         if eth_in.ethertype == ether_types.ETH_TYPE_ARP:
-            fm_arp_reply = self._message_factory.arp_proxy(ofmessage)
-            if fm_arp_reply is not None:
+            # Get the MAC address of the host specified in the ARP request by its IP address.
+            ip_dst = pkt_in.get_protocol(arp.arp).dst_ip
+            mac_dst = self._network_topology.find_mac_addr_by_host_ip(ip_dst)
+            # Ensure that we have a valid MAC address.
+            if mac_dst is not None:
+                # Build the PacketOut message to reply to the ARP request and send it to the switch.
+                fm_arp_reply = self._message_factory.arp_proxy(ofmessage, mac_dst)
                 switch.send_msg(fm_arp_reply)
                 self.logger.info(
                     "packet_in: ARP request received from %s for IP %s. "
-                    "Replied successfully.",
+                    "Host found, replying with MAC %s.",
                     eth_in.src,
-                    pkt_in.get_protocol(arp.arp).dst_ip,
+                    ip_dst,
+                    mac_dst,
                 )
             else:
                 self.logger.warning(
                     "packet_in: ARP request received from %s for IP %s. "
                     "Unable to reply: host not known.",
                     eth_in.src,
-                    pkt_in.get_protocol(arp.arp).dst_ip,
+                    ip_dst,
                 )
             return
 
@@ -483,9 +589,13 @@ class BabyElephantWalk(app_manager.RyuApp):
                     tcp_conn.ip_b,
                     tcp_conn.port_b,
                 )
+                tcp_conn.designated_counting_switch = switch.id
 
             # Update the volume of the connection.
-            tcp_conn.volume += len(pkt_in.data)
+            if tcp_conn.designated_counting_switch == switch.id:
+                # If the connection is being monitored by the current switch, update the volume.
+                # This is done to avoid counting the traffic multiple times.
+                tcp_conn.volume += ip_in.total_length
 
             # If the volume of the connection is greater than the threshold, we can install a rule
             # to forward the TCP stream directly bypassing the controller.
