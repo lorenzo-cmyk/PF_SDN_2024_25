@@ -285,23 +285,64 @@ class NetworkTopology:
         """
         Updates the network topology with the specified links.
         :param links: The list of links to be added to the network topology.
+        :return: True, if the update was successful. False, otherwise.
         """
-        # Clear the existing network model.
-        self._network_model = nx.DiGraph()
-        # Add the links to the network model.
+        # First, the provided link list cannot be empty. If it is empty, the update is rejected.
+        if len(links) == 0:
+            return False
+
+        # Second, all the already known links must be present (as-is) in the provided list. If not,
+        # the update cannot be accepted.
+
+        # Build a new network model based on the provided links.
+        network_model = nx.DiGraph()
         for link in links:
-            self._network_model.add_edge(
-                link.src.dpid, link.dst.dpid, port=link.src.port_no
-            )
+            network_model.add_edge(link.src.dpid, link.dst.dpid, port=link.src.port_no)
+
+        # Check if the new network model is a superset of the current one. We should focus on
+        # checking the nodes and edges only, not the attributes.
+        if set(self._network_model.nodes).issubset(set(network_model.nodes)) and set(
+            self._network_model.edges
+        ).issubset(set(network_model.edges)):
+            self._network_model = network_model
+            return True
+
+        return False
 
     def update_topology_hosts(self, hosts):
         """
         Updates the network topology with the specified hosts.
         :param hosts: The list of hosts to be added to the network topology.
+        :return: True, if the update was successful. False, otherwise.
         """
-        # Clear the existing list of hosts.
-        self._hosts = []
+        # First, the provided host list cannot be empty. If it is empty, the update is rejected.
+        if len(hosts) == 0:
+            print(0)
+            return False
+
+        # Second, all the already known hosts must be present (as-is) in the provided list. If not,
+        # the update cannot be accepted.
+
+        for old_host in self._hosts:
+            # We need to check that the host is present and that the MAC address, dpid and port are
+            # still the same, otherwise the update is rejected.
+
+            # Check first if the host is present.
+            new_host = next((host for host in hosts if host.mac == old_host.mac), None)
+            if new_host is None:
+                return False
+
+            # Check now if the dpid and port are still the same.
+            if (
+                new_host.port.dpid != old_host.port.dpid
+                or new_host.port.port_no != old_host.port.port_no
+            ):
+                return False
+
+        # If the update is accepted, update the network topology with the new hosts.
         self._hosts = hosts
+
+        return True
 
 
 class ConnectionManager:
@@ -388,6 +429,7 @@ class BabyElephantWalk(app_manager.RyuApp):
     # track a variation in the network topology. This is not done now because we assume that a
     # variation of the switches also implies a variation of the links. Edge case: a single switch
     # without any link is connected to the controller.
+    # pylint: disable=unused-argument
     @set_ev_cls(event.EventLinkAdd, CONFIG_DISPATCHER)
     @set_ev_cls(event.EventLinkDelete, CONFIG_DISPATCHER)
     def handle_link_update(self, ev):
@@ -396,21 +438,23 @@ class BabyElephantWalk(app_manager.RyuApp):
         """
         # Asks Ryu to retrieve all the links present in the network.
         links = get_all_link(self)
-        # Prevent update of the network topology if no links are present.
-        if len(links) == 0:
-            self.logger.warning(
-                "link_update: Network topology update rejected: Ryu has provided no links."
+        # Asks NetworkTopology to update the network topology with the new links.
+        result = self._network_topology.update_topology_links(links)
+        # Log the outcome of the update.
+        if result:
+            self.logger.info(
+                "link_update: Network topology update accepted: "
+                "Ryu has found %s valid links.",
+                len(links),
             )
         else:
-            # Update the network topology with the new links.
-            self._network_topology.update_topology_links(links)
-            # Log the update of the network topology.
-            self.logger.info(
-                "link_update: Network topology update accepted: Ryu has found %s links.",
-                len(links),
+            self.logger.warning(
+                "link_update: Network topology update rejected: "
+                "Ryu has provided an invalid topology."
             )
 
     # As per documentation, EventHostDelete is ignored due to being not implemented correctly.
+    # pylint: disable=unused-argument
     @set_ev_cls(event.EventHostAdd, CONFIG_DISPATCHER)
     @set_ev_cls(event.EventHostMove, CONFIG_DISPATCHER)
     def handle_host_update(self, ev):
@@ -419,18 +463,19 @@ class BabyElephantWalk(app_manager.RyuApp):
         """
         # Asks Ryu to retrieve all the hosts present in the network.
         hosts = get_all_host(self)
-        # Prevent update of the network topology if no hosts are present.
-        if len(hosts) == 0:
-            self.logger.warning(
-                "host_update: Network topology update rejected: Ryu has provided no hosts."
+        # Asks NetworkTopology to update the network topology with the new hosts.
+        result = self._network_topology.update_topology_hosts(hosts)
+        # Log the outcome of the update.
+        if result:
+            self.logger.info(
+                "host_update: Network topology update accepted: "
+                "Ryu has found %s valid hosts.",
+                len(hosts),
             )
         else:
-            # Update the network topology with the new hosts.
-            self._network_topology.update_topology_hosts(hosts)
-            # Log the update of the network topology.
-            self.logger.info(
-                "host_update: Network topology update accepted: Ryu has found %s hosts.",
-                len(hosts),
+            self.logger.warning(
+                "host_update: Network topology update rejected: "
+                "Ryu has provided an invalid topology."
             )
 
     # pylint: disable=no-member
