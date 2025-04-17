@@ -7,7 +7,7 @@ mn --custom network.py --topo SDNTestbed
 
 # This import works only if the script is run directly from Mininet class loader.
 # pylint: disable=import-error
-from mininet.topo import Topo
+from mininet.topo import Topo  # type: ignore
 
 
 class SDNTestbed(Topo):
