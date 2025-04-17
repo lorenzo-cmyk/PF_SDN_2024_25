@@ -61,8 +61,7 @@ class MessageFactory:
         """
         Generates a PacketOut message able to reply to an ARP request, de-facto acting as a proxy.
         :param arp_req: The ARP request packet received by the controller.
-        :return: The PacketOut message to be sent to the switch. If the host is not found, None is
-                 returned.
+        :return: The PacketOut message to be sent to the switch.
         """
         # Retrieve the OpenFlow protocol object and relative parser from the switch.
         # The switch itself is extracted from the ARP request.
@@ -75,10 +74,6 @@ class MessageFactory:
         raw_in = packet.Packet(arp_req.data)
         eth_in = raw_in.get_protocol(ethernet.ethernet)
         arp_in = raw_in.get_protocol(arp.arp)
-
-        # Handle only ARP requests, ignore all other types of ARP packets.
-        if arp_in.opcode != arp.ARP_REQUEST:
-            return None
 
         # Starts building the ARP reply packet.
         raw_out = packet.Packet()
@@ -356,8 +351,8 @@ class ConnectionManager:
             self.ip_b = ip_b
             self.port_b = port_b
             self.volume = 0
-            self.ovs_accel_switches = set()
-            self.designated_counting_switch = None
+            self.accelerated_switches = set()
+            self.counting_switch = None
 
     def __init__(self):
         """Initializes the ConnectionManager with an empty list of connections."""
@@ -479,7 +474,8 @@ class BabyElephantWalk(app_manager.RyuApp):
         This event is triggered when a switch connects to the controller.
         :param ev: The event object containing the switch features.
         """
-        # Retrive the switch object from the event. Send to it the default configuration.
+        # Retrive the switch object from the event. Construct and send to it the default
+        # configuration.
         switch = ev.msg.datapath
         switch.send_msg(self._message_factory.default_configuration(switch))
         # Log the connection of the switch.
@@ -507,8 +503,19 @@ class BabyElephantWalk(app_manager.RyuApp):
 
         # If the packet is an ARP request act as a proxy and reply to it.
         if eth_in.ethertype == ether_types.ETH_TYPE_ARP:
+            arp_in = pkt_in.get_protocol(arp.arp)
+
+            # If the packet is not an ARP request, ignore it.
+            if arp_in.opcode != arp.ARP_REQUEST:
+                self.logger.warning(
+                    "packet_in: ARP packet received from %s. "
+                    "Ignoring the packet: not an ARP request.",
+                    eth_in.src,
+                )
+                return
+
             # Get the MAC address of the host specified in the ARP request by its IP address.
-            ip_dst = pkt_in.get_protocol(arp.arp).dst_ip
+            ip_dst = arp_in.dst_ip
             mac_dst = self._network_topology.find_mac_addr_by_host_ip(ip_dst)
             # Ensure that we have a valid MAC address.
             if mac_dst is not None:
@@ -529,6 +536,7 @@ class BabyElephantWalk(app_manager.RyuApp):
                     eth_in.src,
                     ip_dst,
                 )
+
             return
 
         # Drop spurious broadcast traffic.
@@ -589,10 +597,10 @@ class BabyElephantWalk(app_manager.RyuApp):
                     tcp_conn.ip_b,
                     tcp_conn.port_b,
                 )
-                tcp_conn.designated_counting_switch = switch.id
+                tcp_conn.counting_switch = switch.id
 
             # Update the volume of the connection.
-            if tcp_conn.designated_counting_switch == switch.id:
+            if tcp_conn.counting_switch == switch.id:
                 # If the connection is being monitored by the current switch, update the volume.
                 # This is done to avoid counting the traffic multiple times.
                 tcp_conn.volume += ip_in.total_length
@@ -602,7 +610,7 @@ class BabyElephantWalk(app_manager.RyuApp):
             if tcp_conn.volume >= TCP_STREAM_VOLUME_THRESHOLD:
                 # If the connection is already directly forwarded by the switch we don't need to do
                 # anything.
-                if switch.id in tcp_conn.ovs_accel_switches:
+                if switch.id in tcp_conn.accelerated_switches:
                     self.logger.debug(
                         "packet_in: OpenFlow rule for forwarding traffic between %s:%s <-> %s:%s "
                         "is being installed on switch %s. Forwarding manually in the meantime.",
@@ -698,4 +706,4 @@ class BabyElephantWalk(app_manager.RyuApp):
                 )
 
                 # Add the switch to the list of switches that are forwarding the TCP stream
-                tcp_conn.ovs_accel_switches.add(switch.id)
+                tcp_conn.accelerated_switches.add(switch.id)
