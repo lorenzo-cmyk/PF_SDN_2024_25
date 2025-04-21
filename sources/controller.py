@@ -305,7 +305,6 @@ class NetworkTopology:
         """
         # First, the provided host list cannot be empty. If it is empty, the update is rejected.
         if len(hosts) == 0:
-            print(0)
             return False
 
         # Second, all the already known hosts must be present (as-is) in the provided list. If not,
