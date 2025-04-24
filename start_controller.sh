@@ -1,3 +1,13 @@
 #!/bin/bash
 
-ryu-manager --observe-links ./sources/controller.py
+# This script launches ryu-manager with optional Flow Manager support.
+# If flowmanager.py exists, it will be loaded automatically.
+
+# Check if Flow Manager is available at the specified path.
+FLOWMANAGER=$([ -f "./src/tools/flowmanager/flowmanager.py" ] &&
+    echo "./src/tools/flowmanager/flowmanager.py")
+
+# Launch ryu-manager with the main application.
+# The $FLOWMANAGER variable will be included only if the file exists.
+# --observe-links enables topology discovery.
+ryu-manager --observe-links ./src/controller/main.py $FLOWMANAGER
