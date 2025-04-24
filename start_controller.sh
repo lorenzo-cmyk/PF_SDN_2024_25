@@ -1,3 +1,3 @@
 #!/bin/bash
 
-ryu-manager --observe-links ./sources/controller.py
+ryu-manager --observe-links ./src/controller/main.py

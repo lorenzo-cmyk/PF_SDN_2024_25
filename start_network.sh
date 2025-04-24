@@ -1,3 +1,3 @@
 #!/bin/bash
 
-mn --custom ./sources/network.py --topo SDNTestbed --controller=remote
+mn --custom ./src/network/main.py --topo SDNTestbed --controller=remote
