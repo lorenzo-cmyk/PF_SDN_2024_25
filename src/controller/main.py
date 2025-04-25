@@ -8,7 +8,12 @@ from ryu.topology.api import get_all_link, get_all_host, event
 from ryu.lib.packet import packet, ethernet, ether_types, arp, ipv4, tcp
 import networkx as nx
 
-from config import TCP_STREAM_VOLUME_THRESHOLD, TCP_CONNECTION_TIMEOUT, TCP_FORWARDING_RULE_PRIORITY
+from config import (
+    TCP_STREAM_VOLUME_THRESHOLD,
+    TCP_CONNECTION_TIMEOUT,
+    TCP_FORWARDING_RULE_PRIORITY,
+    LOG_LEVEL_REMAP,
+)
 
 
 class MessageFactory:
@@ -267,9 +272,12 @@ class NetworkTopology:
         :param links: The list of links to be added to the network topology.
         :return: True, if the update was successful. False, otherwise.
         """
+        success_message = "Topology update successful. Ryu has provided a valid graph."
+        failture_message = "Topology update failed. Ryu has provided an invalid graph."
+
         # First, the provided link list cannot be empty. If it is empty, the update is rejected.
         if len(links) == 0:
-            return False
+            return failture_message
 
         # Second, all the already known links must be present (as-is) in the provided list. If not,
         # the update cannot be accepted.
@@ -285,9 +293,9 @@ class NetworkTopology:
             self._network_model.edges
         ).issubset(set(network_model.edges)):
             self._network_model = network_model
-            return True
+            return success_message
 
-        return False
+        return failture_message
 
     def update_topology_hosts(self, hosts):
         """
@@ -295,9 +303,12 @@ class NetworkTopology:
         :param hosts: The list of hosts to be added to the network topology.
         :return: True, if the update was successful. False, otherwise.
         """
+        success_message = "Hosts update successful. Ryu has provided a valid set."
+        failture_message = "Hosts update failed. Ryu has provided an invalid set."
+
         # First, the provided host list cannot be empty. If it is empty, the update is rejected.
         if len(hosts) == 0:
-            return False
+            return failture_message
 
         # Second, all the already known hosts must be present (as-is) in the provided list. If not,
         # the update cannot be accepted.
@@ -309,19 +320,19 @@ class NetworkTopology:
             # Check first if the host is present.
             new_host = next((host for host in hosts if host.mac == old_host.mac), None)
             if new_host is None:
-                return False
+                return failture_message
 
             # Check now if the dpid and port are still the same.
             if (
                 new_host.port.dpid != old_host.port.dpid
                 or new_host.port.port_no != old_host.port.port_no
             ):
-                return False
+                return failture_message
 
         # If the update is accepted, update the network topology with the new hosts.
         self._hosts = hosts
 
-        return True
+        return success_message
 
 
 class ConnectionManager:
@@ -384,6 +395,73 @@ class ConnectionManager:
         return tcp_conn
 
 
+class ParametricLogger:
+    """Class used to dynamically steer the logging level of our application.
+    This class exists because Ryu does not support different logging levels for multiple
+    applications thus allowing external software to spam our logs with useless information.
+    """
+
+    def __init__(self, logger, level_mapping=None):
+        """Initializes the ParametricLogger class with the provided logger and the desired
+        logging level re-mapping.
+        :param logger: The logger object that will be used to log messages.
+        :param level_mapping: A dictionary that maps the fictious logging level used in the
+        application to the actual desired logging level
+        """
+        self._logger = logger
+        self._level_mapping = level_mapping or {}
+
+        # Extract the logging methods from the logger object.
+        # This will make more sense later on.
+        self._log_methods = {
+            "debug": self._logger.debug,
+            "info": self._logger.info,
+            "warning": self._logger.warning,
+            "error": self._logger.error,
+            "critical": self._logger.critical,
+        }
+
+    def _log(self, original_level, message, *args, **kwargs):
+        """The class receives a log call with a specified logging level. If _level_mapping is not
+        None, the original logging level is mapped to the desired new one. The proper logging
+        method is then retrieved and called with the message and the arguments.
+        :param original_level: The original logging level of the message.
+        :param message: The message to be logged.
+        :param args: The arguments to be passed to the logging object.
+        :param kwargs: The keyword arguments to be passed to the logging object.
+        """
+        # Eg. We got a log call for level "info" but we want it to become "warning" instead.
+        # This mapping is explicitly defined in the _level_mapping dictionary. We can then retrieve
+        # the desired logging level and retrieve the corresponding logging method. If the mapping
+        # is not defined, we just use the original logging level.
+        new_logging_level = self._level_mapping.get(original_level, original_level)
+        # Is not really needed to have a default value here because the mapping is always defined.
+        # This is done surely to be safe.
+        new_log_method = self._log_methods.get(new_logging_level, self._logger.debug)
+        # Execute the logging.
+        new_log_method(message, *args, **kwargs)
+
+    def debug(self, message, *args, **kwargs):
+        """Logs a "debug" message."""
+        self._log("debug", message, *args, **kwargs)
+
+    def info(self, message, *args, **kwargs):
+        """Logs an "info" message."""
+        self._log("info", message, *args, **kwargs)
+
+    def warning(self, message, *args, **kwargs):
+        """Logs a "warning" message."""
+        self._log("warning", message, *args, **kwargs)
+
+    def error(self, message, *args, **kwargs):
+        """Logs an "error" message."""
+        self._log("error", message, *args, **kwargs)
+
+    def critical(self, message, *args, **kwargs):
+        """Logs a "critical" message."""
+        self._log("critical", message, *args, **kwargs)
+
+
 class BabyElephantWalk(app_manager.RyuApp):
     """Main class of the Ryu application. It contains the event handlers and - therefore - the
     main logic of the controller. It serves as the entry point for the SDN app."""
@@ -402,6 +480,8 @@ class BabyElephantWalk(app_manager.RyuApp):
         self._message_factory = MessageFactory()
         # Initialize a new ConnectionManager instance.
         self._connection_manager = ConnectionManager()
+        # Override the default logger object to use our custom ParametricLogger class.
+        self.logger = ParametricLogger(self.logger, LOG_LEVEL_REMAP)
         # Log the initialization of the application.
         self.logger.info("init: BabyElephantWalk SDN application initialized.")
 
@@ -421,17 +501,7 @@ class BabyElephantWalk(app_manager.RyuApp):
         # Asks NetworkTopology to update the network topology with the new links.
         result = self._network_topology.update_topology_links(links)
         # Log the outcome of the update.
-        if result:
-            self.logger.info(
-                "link_update: Network topology update accepted: "
-                "Ryu has found %s valid links.",
-                len(links),
-            )
-        else:
-            self.logger.warning(
-                "link_update: Network topology update rejected: "
-                "Ryu has provided an invalid topology."
-            )
+        self.logger.info("link_update: %s", result)
 
     # As per documentation, EventHostDelete is ignored due to being not implemented correctly.
     # pylint: disable=unused-argument
@@ -446,17 +516,7 @@ class BabyElephantWalk(app_manager.RyuApp):
         # Asks NetworkTopology to update the network topology with the new hosts.
         result = self._network_topology.update_topology_hosts(hosts)
         # Log the outcome of the update.
-        if result:
-            self.logger.info(
-                "host_update: Network topology update accepted: "
-                "Ryu has found %s valid hosts.",
-                len(hosts),
-            )
-        else:
-            self.logger.warning(
-                "host_update: Network topology update rejected: "
-                "Ryu has provided an invalid topology."
-            )
+        self.logger.info("host_update: %s", result)
 
     # pylint: disable=no-member
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
