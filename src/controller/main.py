@@ -8,7 +8,12 @@ from ryu.topology.api import get_all_link, get_all_host, event
 from ryu.lib.packet import packet, ethernet, ether_types, arp, ipv4, tcp
 import networkx as nx
 
-from config import TCP_STREAM_VOLUME_THRESHOLD, TCP_CONNECTION_TIMEOUT, TCP_FORWARDING_RULE_PRIORITY
+from config import (
+    TCP_STREAM_VOLUME_THRESHOLD,
+    TCP_CONNECTION_TIMEOUT,
+    TCP_FORWARDING_RULE_PRIORITY,
+    LOG_LEVEL_REMAP,
+)
 
 
 class MessageFactory:
@@ -384,6 +389,73 @@ class ConnectionManager:
         return tcp_conn
 
 
+class ParametricLogger:
+    """Class used to dynamically steer the logging level of our application.
+    This class exists because Ryu does not support different logging levels for multiple
+    applications thus allowing external software to spam our logs with useless information.
+    """
+
+    def __init__(self, logger, level_mapping=None):
+        """Initializes the ParametricLogger class with the provided logger and the desired
+        logging level re-mapping.
+        :param logger: The logger object that will be used to log messages.
+        :param level_mapping: A dictionary that maps the fictious logging level used in the
+        application to the actual desired logging level
+        """
+        self._logger = logger
+        self._level_mapping = level_mapping or {}
+
+        # Extract the logging methods from the logger object.
+        # This will make more sense later on.
+        self._log_methods = {
+            "debug": self._logger.debug,
+            "info": self._logger.info,
+            "warning": self._logger.warning,
+            "error": self._logger.error,
+            "critical": self._logger.critical,
+        }
+
+    def _log(self, original_level, message, *args, **kwargs):
+        """The class receives a log call with a specified logging level. If _level_mapping is not
+        None, the original logging level is mapped to the desired new one. The proper logging
+        method is then retrieved and called with the message and the arguments.
+        :param original_level: The original logging level of the message.
+        :param message: The message to be logged.
+        :param args: The arguments to be passed to the logging object.
+        :param kwargs: The keyword arguments to be passed to the logging object.
+        """
+        # Eg. We got a log call for level "info" but we want it to become "warning" instead.
+        # This mapping is explicitly defined in the _level_mapping dictionary. We can then retrieve
+        # the desired logging level and retrieve the corresponding logging method. If the mapping
+        # is not defined, we just use the original logging level.
+        new_logging_level = self._level_mapping.get(original_level, original_level)
+        # Is not really needed to have a default value here because the mapping is always defined.
+        # This is done surely to be safe.
+        new_log_method = self._log_methods.get(new_logging_level, self._logger.debug)
+        # Execute the logging.
+        new_log_method(message, *args, **kwargs)
+
+    def debug(self, message, *args, **kwargs):
+        """Logs a "debug" message."""
+        self._log("debug", message, *args, **kwargs)
+
+    def info(self, message, *args, **kwargs):
+        """Logs an "info" message."""
+        self._log("info", message, *args, **kwargs)
+
+    def warning(self, message, *args, **kwargs):
+        """Logs a "warning" message."""
+        self._log("warning", message, *args, **kwargs)
+
+    def error(self, message, *args, **kwargs):
+        """Logs an "error" message."""
+        self._log("error", message, *args, **kwargs)
+
+    def critical(self, message, *args, **kwargs):
+        """Logs a "critical" message."""
+        self._log("critical", message, *args, **kwargs)
+
+
 class BabyElephantWalk(app_manager.RyuApp):
     """Main class of the Ryu application. It contains the event handlers and - therefore - the
     main logic of the controller. It serves as the entry point for the SDN app."""
@@ -402,6 +474,8 @@ class BabyElephantWalk(app_manager.RyuApp):
         self._message_factory = MessageFactory()
         # Initialize a new ConnectionManager instance.
         self._connection_manager = ConnectionManager()
+        # Override the default logger object to use our custom ParametricLogger class.
+        self.logger = ParametricLogger(self.logger, LOG_LEVEL_REMAP)
         # Log the initialization of the application.
         self.logger.info("init: BabyElephantWalk SDN application initialized.")
 

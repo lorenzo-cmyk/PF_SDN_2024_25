@@ -10,4 +10,5 @@ FLOWMANAGER=$([ -f "./src/tools/flowmanager/flowmanager.py" ] &&
 # Launch ryu-manager with the main application.
 # The $FLOWMANAGER variable will be included only if the file exists.
 # --observe-links enables topology discovery.
-ryu-manager --observe-links ./src/controller/main.py $FLOWMANAGER
+# --default-log-level 30 sets the logging level to WARNING. Prevents logs spamming.
+ryu-manager --default-log-level 30 --observe-links ./src/controller/main.py $FLOWMANAGER
