@@ -272,9 +272,12 @@ class NetworkTopology:
         :param links: The list of links to be added to the network topology.
         :return: True, if the update was successful. False, otherwise.
         """
+        success_message = "Topology update successful. Ryu has provided a valid graph."
+        failture_message = "Topology update failed. Ryu has provided an invalid graph."
+
         # First, the provided link list cannot be empty. If it is empty, the update is rejected.
         if len(links) == 0:
-            return False
+            return failture_message
 
         # Second, all the already known links must be present (as-is) in the provided list. If not,
         # the update cannot be accepted.
@@ -290,9 +293,9 @@ class NetworkTopology:
             self._network_model.edges
         ).issubset(set(network_model.edges)):
             self._network_model = network_model
-            return True
+            return success_message
 
-        return False
+        return failture_message
 
     def update_topology_hosts(self, hosts):
         """
@@ -300,9 +303,12 @@ class NetworkTopology:
         :param hosts: The list of hosts to be added to the network topology.
         :return: True, if the update was successful. False, otherwise.
         """
+        success_message = "Hosts update successful. Ryu has provided a valid set."
+        failture_message = "Hosts update failed. Ryu has provided an invalid set."
+
         # First, the provided host list cannot be empty. If it is empty, the update is rejected.
         if len(hosts) == 0:
-            return False
+            return failture_message
 
         # Second, all the already known hosts must be present (as-is) in the provided list. If not,
         # the update cannot be accepted.
@@ -314,19 +320,19 @@ class NetworkTopology:
             # Check first if the host is present.
             new_host = next((host for host in hosts if host.mac == old_host.mac), None)
             if new_host is None:
-                return False
+                return failture_message
 
             # Check now if the dpid and port are still the same.
             if (
                 new_host.port.dpid != old_host.port.dpid
                 or new_host.port.port_no != old_host.port.port_no
             ):
-                return False
+                return failture_message
 
         # If the update is accepted, update the network topology with the new hosts.
         self._hosts = hosts
 
-        return True
+        return success_message
 
 
 class ConnectionManager:
@@ -495,17 +501,7 @@ class BabyElephantWalk(app_manager.RyuApp):
         # Asks NetworkTopology to update the network topology with the new links.
         result = self._network_topology.update_topology_links(links)
         # Log the outcome of the update.
-        if result:
-            self.logger.info(
-                "link_update: Network topology update accepted: "
-                "Ryu has found %s valid links.",
-                len(links),
-            )
-        else:
-            self.logger.warning(
-                "link_update: Network topology update rejected: "
-                "Ryu has provided an invalid topology."
-            )
+        self.logger.info("link_update: %s", result)
 
     # As per documentation, EventHostDelete is ignored due to being not implemented correctly.
     # pylint: disable=unused-argument
@@ -520,17 +516,7 @@ class BabyElephantWalk(app_manager.RyuApp):
         # Asks NetworkTopology to update the network topology with the new hosts.
         result = self._network_topology.update_topology_hosts(hosts)
         # Log the outcome of the update.
-        if result:
-            self.logger.info(
-                "host_update: Network topology update accepted: "
-                "Ryu has found %s valid hosts.",
-                len(hosts),
-            )
-        else:
-            self.logger.warning(
-                "host_update: Network topology update rejected: "
-                "Ryu has provided an invalid topology."
-            )
+        self.logger.info("host_update: %s", result)
 
     # pylint: disable=no-member
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
