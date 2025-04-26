@@ -642,7 +642,7 @@ class BabyElephantWalk(app_manager.RyuApp):
         """
         # Asks Ryu to retrieve all the links present in the network.
         links = get_all_link(self)
-        # Asks the NetworkTopology istance to update the network topology with the new links.
+        # Asks the NetworkTopology instance to update the network topology with the new links.
         result = self._network_topology.update_topology_links(links)
         # Log the outcome of the update.
         self.logger.info("link_update: %s", result)
@@ -657,7 +657,7 @@ class BabyElephantWalk(app_manager.RyuApp):
         """
         # Asks Ryu to retrieve all the hosts present in the network.
         hosts = get_all_host(self)
-        # Asks the NetworkTopology istance to update the network topology with the new hosts.
+        # Asks the NetworkTopology instance to update the network topology with the new hosts.
         result = self._network_topology.update_topology_hosts(hosts)
         # Log the outcome of the update.
         self.logger.info("host_update: %s", result)
