@@ -198,7 +198,7 @@ class NetworkTopology:
         self._network_model = nx.DiGraph()
         self._hosts = []
 
-    def __find_switch_by_host_mac(self, dst_mac):
+    def _find_switch_by_host_mac(self, dst_mac):
         """
         Finds the switch that has the host with the specified MAC address connected to it.
         :param dst_mac: The MAC address of the host to be found.
@@ -220,7 +220,7 @@ class NetworkTopology:
         found_host = next((host for host in self._hosts if host_ip in host.ipv4), None)
         return found_host.mac if found_host else None
 
-    def __find_next_hop_port(self, src_switch_id, dst_switch_id):
+    def _find_next_hop_port(self, src_switch_id, dst_switch_id):
         """
         Finds the port which connects the source switch to the next hop switch in the path to the
         destination switch.
@@ -252,7 +252,7 @@ class NetworkTopology:
         :return: The output port number.
         """
         # Find the switch that has the host with the specified MAC address connected to it.
-        (dst_switch_id, dst_switch_port) = self.__find_switch_by_host_mac(dst_mac)
+        (dst_switch_id, dst_switch_port) = self._find_switch_by_host_mac(dst_mac)
 
         # If the host is not found, return None.
         if dst_switch_id is None:
@@ -264,7 +264,7 @@ class NetworkTopology:
             return dst_switch_port
 
         # Otherwise, find the next hop port in the path to the destination switch.
-        return self.__find_next_hop_port(src_switch.id, dst_switch_id)
+        return self._find_next_hop_port(src_switch.id, dst_switch_id)
 
     def update_topology_links(self, links):
         """
@@ -360,7 +360,7 @@ class ConnectionManager:
         """Initializes the ConnectionManager with an empty list of connections."""
         self._connections = {}
 
-    def __canonicalize(self, ip_a, port_a, ip_b, port_b):
+    def _canonicalize(self, ip_a, port_a, ip_b, port_b):
         """Returns the canonical representation of a TCP connection between two hosts.
         :param ip_a: The IP address of the first host.
         :param port_a: The port number of the first host.
@@ -384,7 +384,7 @@ class ConnectionManager:
         :return: The TCP connection object.
         """
         # Get the canonical representation of the TCP connection.
-        key = self.__canonicalize(ip_a, port_a, ip_b, port_b)
+        key = self._canonicalize(ip_a, port_a, ip_b, port_b)
 
         # Try to retrieve the connection from the dictionary.
         tcp_conn = self._connections.get(key)
