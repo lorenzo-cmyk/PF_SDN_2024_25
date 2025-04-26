@@ -17,3 +17,8 @@ LOG_LEVEL_REMAP = {
     "info": "warning",
     "warning": "error",
 }
+
+# Whether to use the topology caching mechanism. If set to True, the controller will cache the
+# topology information locally and will not query Ryu for it every time. This improves performance,
+# stability against Ryu flaps but as implemented prevents any sort of fault tolerance.
+TOPOLOGY_CACHING = True

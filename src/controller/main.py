@@ -14,6 +14,7 @@ from config import (
     TCP_CONNECTION_TIMEOUT,
     TCP_FORWARDING_RULE_PRIORITY,
     LOG_LEVEL_REMAP,
+    TOPOLOGY_CACHING,
 )
 
 
@@ -243,7 +244,7 @@ class QueryingNetworkTopology(NetworkTopology):
         :return: The switch ID that has the host connected to it and the port number of the host.
         """
         found_host = next(
-            (host for host in self._app.get_all_host() if host.mac == dst_mac), None
+            (host for host in get_all_host(self._app) if host.mac == dst_mac), None
         )
         return (
             (found_host.port.dpid, found_host.port.port_no)
@@ -258,7 +259,7 @@ class QueryingNetworkTopology(NetworkTopology):
         :return: The MAC address of the host.
         """
         found_host = next(
-            (host for host in self._app.get_all_host() if host_ip in host.ipv4), None
+            (host for host in get_all_host(self._app) if host_ip in host.ipv4), None
         )
         return found_host.mac if found_host else None
 
@@ -271,7 +272,7 @@ class QueryingNetworkTopology(NetworkTopology):
         :return: The port number on the source switch leading towards the next hop.
         """
         network_model = nx.DiGraph()
-        for link in self._app.get_all_link():
+        for link in get_all_link(self._app):
             network_model.add_edge(link.src.dpid, link.dst.dpid, port=link.src.port_no)
         # Find the shortest path between the source and destination switches.
         try:
@@ -614,8 +615,11 @@ class BabyElephantWalk(app_manager.RyuApp):
         :param kwargs: The keyword arguments to be passed to the Ryu application.
         """
         super().__init__(*args, **kwargs)
-        # Initialize a new CachingNetworkTopology instance.
-        self._network_topology = CachingNetworkTopology()
+        # Initialize a new NetworkTopology instance.
+        if TOPOLOGY_CACHING is True:
+            self._network_topology = CachingNetworkTopology()
+        else:
+            self._network_topology = QueryingNetworkTopology(self)
         # Initialize a new MessageFactory instance.
         self._message_factory = MessageFactory()
         # Initialize a new ConnectionManager instance.
