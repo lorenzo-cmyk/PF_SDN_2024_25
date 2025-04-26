@@ -1,5 +1,6 @@
 """Baby Elephant Walk - Ryu SDN Application"""
 
+from abc import ABC, abstractmethod
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import set_ev_cls, CONFIG_DISPATCHER, MAIN_DISPATCHER
@@ -190,7 +191,146 @@ class MessageFactory:
         return rule
 
 
-class CachingNetworkTopology:
+class NetworkTopology(ABC):
+    """Class used to represent the network topology."""
+
+    @abstractmethod
+    def find_mac_addr_by_host_ip(self, host_ip):
+        """
+        Finds the MAC address of the host with the specified IP address.
+        :param host_ip: The IP address of the host to be found.
+        :return: The MAC address of the host.
+        """
+
+    @abstractmethod
+    def find_output_port(self, src_switch, dst_mac):
+        """
+        Finds the output port to which the packet should be sent based on the destination MAC
+        address.
+        :param src_switch: The object representing the source switch.
+        :param dst_mac: The destination MAC address.
+        :return: The output port number.
+        """
+
+    @abstractmethod
+    def update_topology_links(self, links):
+        """
+        Updates the network topology with the specified links.
+        :param links: The list of links used to update the network topology.
+        :return: A message indicating the outcome of the update.
+        """
+
+    @abstractmethod
+    def update_topology_hosts(self, hosts):
+        """
+        Updates the network topology with the specified hosts.
+        :param hosts: The list of hosts used to update the network topology.
+        :return: A message indicating the outcome of the update.
+        """
+
+
+class QueryingNetworkTopology(NetworkTopology):
+    """Class used to represent the network topology (by always querying Ryu first!)."""
+
+    def __init__(self, app):
+        """Initializes the QueryingNetworkTopology with the Ryu app itself."""
+        self._app = app
+
+    def _find_switch_by_host_mac(self, dst_mac):
+        """
+        Finds the switch that has the host with the specified MAC address connected to it.
+        :param dst_mac: The MAC address of the host to be found.
+        :return: The switch ID that has the host connected to it and the port number of the host.
+        """
+        found_host = next(
+            (host for host in self._app.get_all_host() if host.mac == dst_mac), None
+        )
+        return (
+            (found_host.port.dpid, found_host.port.port_no)
+            if found_host
+            else (None, None)
+        )
+
+    def find_mac_addr_by_host_ip(self, host_ip):
+        """
+        Finds the MAC address of the host with the specified IP address.
+        :param host_ip: The IP address of the host to be found.
+        :return: The MAC address of the host.
+        """
+        found_host = next(
+            (host for host in self._app.get_all_host() if host_ip in host.ipv4), None
+        )
+        return found_host.mac if found_host else None
+
+    def _find_next_hop_port(self, src_switch_id, dst_switch_id):
+        """
+        Finds the port which connects the source switch to the next hop switch in the path to the
+        destination switch.
+        :param src_switch_id: The ID of the source switch.
+        :param dst_switch_id: The ID of the destination switch.
+        :return: The port number on the source switch leading towards the next hop.
+        """
+        network_model = nx.DiGraph()
+        for link in self._app.get_all_link():
+            network_model.add_edge(link.src.dpid, link.dst.dpid, port=link.src.port_no)
+        # Find the shortest path between the source and destination switches.
+        try:
+            path = nx.shortest_path(network_model, src_switch_id, dst_switch_id)
+        except nx.NetworkXNoPath:
+            # No path found between the source and destination switches.
+            return None
+        except nx.NodeNotFound:
+            # One of the switches is not present in the network model.
+            return None
+
+        # Get the first link in the path.
+        first_link = network_model[path[0]][path[1]]
+        # Return the port number of the first link.
+        return first_link["port"]
+
+    def find_output_port(self, src_switch, dst_mac):
+        """
+        Finds the output port to which the packet should be sent based on the destination MAC
+        address.
+        :param src_switch: The object representing the source switch.
+        :param dst_mac: The destination MAC address.
+        :return: The output port number.
+        """
+        # Find the switch that has the host with the specified MAC address connected to it.
+        (dst_switch_id, dst_switch_port) = self._find_switch_by_host_mac(dst_mac)
+
+        # If the host is not found, return None.
+        if dst_switch_id is None:
+            return None
+
+        # If the host is directly connected to the source switch, return the port number of the
+        # host.
+        if dst_switch_id == src_switch.id:
+            return dst_switch_port
+
+        # Otherwise, find the next hop port in the path to the destination switch.
+        return self._find_next_hop_port(src_switch.id, dst_switch_id)
+
+    # pylint: disable=unused-argument
+    def update_topology_links(self, links):
+        """
+        Updates the network topology with the specified links.
+        :param links: Unused. Left here to keep the API consistent.
+        :return: A message informing that caching is not used in this implementation.
+        """
+        return "Detected a topology update event. Caching is currently disabled."
+
+    # pylint: disable=unused-argument
+    def update_topology_hosts(self, hosts):
+        """
+        Updates the network topology with the specified hosts.
+        :param hosts: Unused. Left here to keep the API consistent.
+        :return: A message informing that caching is not used in this implementation.
+        """
+        return "Detected a hosts update event. Caching is currently disabled."
+
+
+class CachingNetworkTopology(NetworkTopology):
     """Class used to represent the network topology (with caching!)."""
 
     def __init__(self):
@@ -270,7 +410,7 @@ class CachingNetworkTopology:
         """
         Updates the network topology with the specified links.
         :param links: The list of links to be added to the network topology.
-        :return: True, if the update was successful. False, otherwise.
+        :return: A message indicating the outcome of the update.
         """
         success_message = "Topology update successful. Ryu has provided a valid graph."
         failture_message = "Topology update failed. Ryu has provided an invalid graph."
@@ -301,7 +441,7 @@ class CachingNetworkTopology:
         """
         Updates the network topology with the specified hosts.
         :param hosts: The list of hosts to be added to the network topology.
-        :return: True, if the update was successful. False, otherwise.
+        :return: A message indicating the outcome of the update.
         """
         success_message = "Hosts update successful. Ryu has provided a valid set."
         failture_message = "Hosts update failed. Ryu has provided an invalid set."
