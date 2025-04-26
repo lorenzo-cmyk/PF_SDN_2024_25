@@ -190,11 +190,11 @@ class MessageFactory:
         return rule
 
 
-class NetworkTopology:
-    """Class used to represent the network topology."""
+class CachingNetworkTopology:
+    """Class used to represent the network topology (with caching!)."""
 
     def __init__(self):
-        """Initializes the NetworkTopology with an empty network model."""
+        """Initializes the CachingNetworkTopology with an empty network model."""
         self._network_model = nx.DiGraph()
         self._hosts = []
 
@@ -474,8 +474,8 @@ class BabyElephantWalk(app_manager.RyuApp):
         :param kwargs: The keyword arguments to be passed to the Ryu application.
         """
         super().__init__(*args, **kwargs)
-        # Initialize a new NetworkTopology instance.
-        self._network_topology = NetworkTopology()
+        # Initialize a new CachingNetworkTopology instance.
+        self._network_topology = CachingNetworkTopology()
         # Initialize a new MessageFactory instance.
         self._message_factory = MessageFactory()
         # Initialize a new ConnectionManager instance.
@@ -498,7 +498,7 @@ class BabyElephantWalk(app_manager.RyuApp):
         """
         # Asks Ryu to retrieve all the links present in the network.
         links = get_all_link(self)
-        # Asks NetworkTopology to update the network topology with the new links.
+        # Asks the NetworkTopology istance to update the network topology with the new links.
         result = self._network_topology.update_topology_links(links)
         # Log the outcome of the update.
         self.logger.info("link_update: %s", result)
@@ -513,7 +513,7 @@ class BabyElephantWalk(app_manager.RyuApp):
         """
         # Asks Ryu to retrieve all the hosts present in the network.
         hosts = get_all_host(self)
-        # Asks NetworkTopology to update the network topology with the new hosts.
+        # Asks the NetworkTopology istance to update the network topology with the new hosts.
         result = self._network_topology.update_topology_hosts(hosts)
         # Log the outcome of the update.
         self.logger.info("host_update: %s", result)
