@@ -11,6 +11,7 @@ import networkx as nx
 
 from config import (
     TCP_STREAM_VOLUME_THRESHOLD,
+    TCP_TIMEOUT_TRACKING,
     TCP_CONNECTION_TIMEOUT,
     TCP_FORWARDING_RULE_PRIORITY,
     LOG_LEVEL_REMAP,
@@ -185,8 +186,9 @@ class MessageFactory:
             priority=TCP_FORWARDING_RULE_PRIORITY,
             match=match,
             instructions=instructions,
-            # Timeout: the rule will expire after TCP_CONNECTION_TIMEOUT seconds of inactivity.
-            idle_timeout=TCP_CONNECTION_TIMEOUT,
+            # Timeout: the rule will expire after TCP_CONNECTION_TIMEOUT seconds of inactivity
+            # but only if TCP_TIMEOUT_TRACKING is enabled. Otherwise, the rule will never expire.
+            idle_timeout=TCP_CONNECTION_TIMEOUT if TCP_TIMEOUT_TRACKING is True else 0,
         )
 
         return rule
