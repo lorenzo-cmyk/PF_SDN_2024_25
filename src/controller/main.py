@@ -7,10 +7,12 @@ from ryu.controller.handler import set_ev_cls, CONFIG_DISPATCHER, MAIN_DISPATCHE
 from ryu.ofproto import ofproto_v1_3, inet
 from ryu.topology.api import get_all_link, get_all_host, event
 from ryu.lib.packet import packet, ethernet, ether_types, arp, ipv4, tcp
+from ryu.lib import hub
 import networkx as nx
 
 from config import (
     TCP_STREAM_VOLUME_THRESHOLD,
+    TCP_TIMEOUT_TRACKING,
     TCP_CONNECTION_TIMEOUT,
     TCP_FORWARDING_RULE_PRIORITY,
     LOG_LEVEL_REMAP,
@@ -185,8 +187,9 @@ class MessageFactory:
             priority=TCP_FORWARDING_RULE_PRIORITY,
             match=match,
             instructions=instructions,
-            # Timeout: the rule will expire after TCP_CONNECTION_TIMEOUT seconds of inactivity.
-            idle_timeout=TCP_CONNECTION_TIMEOUT,
+            # Timeout: the rule will expire after TCP_CONNECTION_TIMEOUT seconds of inactivity
+            # but only if TCP_TIMEOUT_TRACKING is enabled. Otherwise, the rule will never expire.
+            idle_timeout=TCP_CONNECTION_TIMEOUT if TCP_TIMEOUT_TRACKING is True else 0,
         )
 
         return rule
@@ -496,6 +499,7 @@ class ConnectionManager:
             self.volume = 0
             self.accelerated_switches = set()
             self.counting_switch = None
+            self.is_active = True
 
     def __init__(self):
         """Initializes the ConnectionManager with an empty list of connections."""
@@ -534,6 +538,33 @@ class ConnectionManager:
             tcp_conn = self.Connection(ip_a, port_a, ip_b, port_b)
             self._connections[key] = tcp_conn
         return tcp_conn
+
+    def cleanup_connections(self):
+        """This method is meant to be called periodically to clean up connections that are not
+        active anymore. Two invocations of this method are needed to remove any connection:
+        the first marks all connection as inactive: then, time passes and if a packet is received
+        by the controller this flag is reset. The second invocation removes all the still inactive
+        communications and sets again the is_active bit to False ensuring that the loop can
+        continue.
+        :returns : A tuple containing the number of active and inactive connections.
+        """
+        active_connections = 0
+        inactive_connections = 0
+
+        # Take a snapshot of the current keys to avoid errors while iterating.
+        for key in list(self._connections.keys()):
+            # Retrieve the connection object from the dictionary.
+            connection = self._connections[key]
+            if connection.is_active:
+                # If the connection is active, mark it as inactive.
+                connection.is_active = False
+                active_connections += 1
+            else:
+                # If the connection is inactive, remove it from the dictionary.
+                self._connections.pop(key, None)
+                inactive_connections += 1
+
+        return active_connections, inactive_connections
 
 
 class ParametricLogger:
@@ -625,9 +656,35 @@ class BabyElephantWalk(app_manager.RyuApp):
         # Initialize a new ConnectionManager instance.
         self._connection_manager = ConnectionManager()
         # Override the default logger object to use our custom ParametricLogger class.
-        self.logger = ParametricLogger(self.logger, LOG_LEVEL_REMAP)
+        self._logger = ParametricLogger(self.logger, LOG_LEVEL_REMAP)
         # Log the initialization of the application.
-        self.logger.info("init: BabyElephantWalk SDN application initialized.")
+        self._logger.info("init: BabyElephantWalk SDN application initialized.")
+        if TCP_TIMEOUT_TRACKING is True:
+            # Start a timer to periodically clean up inactive connections.
+            self._connections_cleanup_timer = hub.spawn(self.handle_connections_cleanup)
+
+    def handle_connections_cleanup(self):
+        """Periodically calls the cleanup_connections method of the ConnectionManager instance to
+        clean up inactive connections. This method is not really running in a thread: Ryu just
+        add a special event to the event queue that triggers this method. We are thread-safe because
+        there is not really any concurrency...
+        """
+        self._logger.info(
+            "connections_cleanup: Global connections cleanup timer activated."
+        )
+        while True:
+            # Do stuff...
+            active_connections, inactive_connections = (
+                self._connection_manager.cleanup_connections()
+            )
+            self._logger.info(
+                "connections_cleanup: Found %d active communications. Removed %d "
+                "inactive/offloaded connections.",
+                active_connections,
+                inactive_connections,
+            )
+            # Take a nap...
+            hub.sleep(TCP_CONNECTION_TIMEOUT)
 
     # If needed, also EventSwitchEnter/EventSwitchLeave/EventSwitchReconnected could be used to
     # track a variation in the network topology. This is not done now because we assume that a
@@ -645,7 +702,7 @@ class BabyElephantWalk(app_manager.RyuApp):
         # Asks the NetworkTopology instance to update the network topology with the new links.
         result = self._network_topology.update_topology_links(links)
         # Log the outcome of the update.
-        self.logger.info("link_update: %s", result)
+        self._logger.info("link_update: %s", result)
 
     # As per documentation, EventHostDelete is ignored due to being not implemented correctly.
     # pylint: disable=unused-argument
@@ -660,7 +717,7 @@ class BabyElephantWalk(app_manager.RyuApp):
         # Asks the NetworkTopology instance to update the network topology with the new hosts.
         result = self._network_topology.update_topology_hosts(hosts)
         # Log the outcome of the update.
-        self.logger.info("host_update: %s", result)
+        self._logger.info("host_update: %s", result)
 
     # pylint: disable=no-member
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
@@ -674,7 +731,7 @@ class BabyElephantWalk(app_manager.RyuApp):
         switch = ev.msg.datapath
         switch.send_msg(self._message_factory.default_configuration(switch))
         # Log the connection of the switch.
-        self.logger.info(
+        self._logger.info(
             "switch_features: Switch %s connected, default configuration sent.",
             switch.id,
         )
@@ -702,7 +759,7 @@ class BabyElephantWalk(app_manager.RyuApp):
 
             # If the packet is not an ARP request, ignore it.
             if arp_in.opcode != arp.ARP_REQUEST:
-                self.logger.warning(
+                self._logger.warning(
                     "packet_in: ARP packet received from %s. "
                     "Ignoring the packet: not an ARP request.",
                     eth_in.src,
@@ -717,7 +774,7 @@ class BabyElephantWalk(app_manager.RyuApp):
                 # Build the PacketOut message to reply to the ARP request and send it to the switch.
                 fm_arp_reply = self._message_factory.arp_proxy(ofmessage, mac_dst)
                 switch.send_msg(fm_arp_reply)
-                self.logger.info(
+                self._logger.info(
                     "packet_in: ARP request received from %s for IP %s. "
                     "Host found, replying with MAC %s.",
                     eth_in.src,
@@ -725,7 +782,7 @@ class BabyElephantWalk(app_manager.RyuApp):
                     mac_dst,
                 )
             else:
-                self.logger.warning(
+                self._logger.warning(
                     "packet_in: ARP request received from %s for IP %s. "
                     "Unable to reply: host not known.",
                     eth_in.src,
@@ -736,7 +793,7 @@ class BabyElephantWalk(app_manager.RyuApp):
 
         # Drop spurious broadcast traffic.
         if eth_in.dst == "ff:ff:ff:ff:ff:ff":
-            self.logger.warning(
+            self._logger.warning(
                 "packet_in: Spurious broadcast traffic received from %s. Dropping the packet.",
                 eth_in.src,
             )
@@ -762,7 +819,7 @@ class BabyElephantWalk(app_manager.RyuApp):
             # Deliberately NOT logging this event in order to avoid spamming the logs.
         else:
             # Unable to find a route to the destination MAC address. Dropping the packet.
-            self.logger.warning(
+            self._logger.warning(
                 "packet_in: Unable to find a route from switch %s to host %s. Dropping the packet.",
                 switch.id,
                 eth_in.dst,
@@ -784,7 +841,7 @@ class BabyElephantWalk(app_manager.RyuApp):
 
             # If the connection is brand new, log it.
             if tcp_conn.volume == 0:
-                self.logger.info(
+                self._logger.info(
                     "packet_in: New TCP connection detected: %s:%s <-> %s:%s. "
                     "Monitoring started.",
                     tcp_conn.ip_a,
@@ -793,6 +850,13 @@ class BabyElephantWalk(app_manager.RyuApp):
                     tcp_conn.port_b,
                 )
                 tcp_conn.counting_switch = switch.id
+
+            # In any case, we have a packet that belongs to a TCP connection. This means that the
+            # connection is active. Make sure to keep the flag is_active set to True.
+            tcp_conn.is_active = True
+            # N.B: A connection can be removed from ConnectionManager - due to packet not arriving
+            # to the controller - but still be active on the switches. This is intended: we have
+            # offloaded the connection to the dataplane and its not our job to track it anymore.
 
             # Update the volume of the connection.
             if tcp_conn.counting_switch == switch.id:
@@ -806,7 +870,7 @@ class BabyElephantWalk(app_manager.RyuApp):
                 # If the connection is already directly forwarded by the switch we don't need to do
                 # anything.
                 if switch.id in tcp_conn.accelerated_switches:
-                    self.logger.debug(
+                    self._logger.debug(
                         "packet_in: OpenFlow rule for forwarding traffic between %s:%s <-> %s:%s "
                         "is being installed on switch %s. Forwarding manually in the meantime.",
                         tcp_conn.ip_a,
@@ -838,7 +902,7 @@ class BabyElephantWalk(app_manager.RyuApp):
                 # If we are unable to find a route to the destination MAC address abort the rule
                 # installation.
                 if a_to_b_phy_port is None:
-                    self.logger.warning(
+                    self._logger.warning(
                         "packet_in: Unable to find a route from switch %s to host %s. "
                         "Aborting forwarding rule installation.",
                         switch.id,
@@ -862,7 +926,7 @@ class BabyElephantWalk(app_manager.RyuApp):
                 # If we are unable to find a route to the destination MAC address abort the rule
                 # installation.
                 if b_to_a_phy_port is None:
-                    self.logger.warning(
+                    self._logger.warning(
                         "packet_in: Unable to find a route from switch %s to host %s. "
                         "Aborting forwarding rule installation.",
                         switch.id,
@@ -881,7 +945,7 @@ class BabyElephantWalk(app_manager.RyuApp):
 
                 # Send the FlowMod messages to the switch.
                 switch.send_msg(fm_rule_a_to_b)
-                self.logger.info(
+                self._logger.info(
                     "packet_in: Rule installed for %s:%s -> %s:%s traffic on switch %s.",
                     endp_a_ip,
                     endp_a_port,
@@ -891,7 +955,7 @@ class BabyElephantWalk(app_manager.RyuApp):
                 )
 
                 switch.send_msg(fm_rule_b_to_a)
-                self.logger.info(
+                self._logger.info(
                     "packet_in: Rule installed for %s:%s -> %s:%s traffic on switch %s.",
                     endp_b_ip,
                     endp_b_port,
