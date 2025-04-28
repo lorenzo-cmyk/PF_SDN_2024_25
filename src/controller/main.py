@@ -7,6 +7,7 @@ from ryu.controller.handler import set_ev_cls, CONFIG_DISPATCHER, MAIN_DISPATCHE
 from ryu.ofproto import ofproto_v1_3, inet
 from ryu.topology.api import get_all_link, get_all_host, event
 from ryu.lib.packet import packet, ethernet, ether_types, arp, ipv4, tcp
+from ryu.lib import hub
 import networkx as nx
 
 from config import (
@@ -538,6 +539,33 @@ class ConnectionManager:
             self._connections[key] = tcp_conn
         return tcp_conn
 
+    def cleanup_connections(self):
+        """This method is meant to be called periodically to clean up connections that are not
+        active anymore. Two invocations of this method are needed to remove any connection:
+        the first marks all connection as inactive: then, time passes and if a packet is received
+        by the controller this flag is reset. The second invocation removes all the still inactive
+        communications and sets again the is_active bit to False ensuring that the loop can
+        continue.
+        :returns : A tuple containing the number of active and inactive connections.
+        """
+        active_connections = 0
+        inactive_connections = 0
+
+        # Take a snapshot of the current keys to avoid errors while iterating.
+        for key in list(self._connections.keys()):
+            # Retrieve the connection object from the dictionary.
+            connection = self._connections[key]
+            if connection.is_active:
+                # If the connection is active, mark it as inactive.
+                connection.is_active = False
+                active_connections += 1
+            else:
+                # If the connection is inactive, remove it from the dictionary.
+                self._connections.pop(key, None)
+                inactive_connections += 1
+
+        return active_connections, inactive_connections
+
 
 class ParametricLogger:
     """Class used to dynamically steer the logging level of our application.
@@ -631,6 +659,32 @@ class BabyElephantWalk(app_manager.RyuApp):
         self.logger = ParametricLogger(self.logger, LOG_LEVEL_REMAP)
         # Log the initialization of the application.
         self.logger.info("init: BabyElephantWalk SDN application initialized.")
+        if TCP_TIMEOUT_TRACKING is True:
+            # Start a timer to periodically clean up inactive connections.
+            self._connections_cleanup_timer = hub.spawn(self.handle_connections_cleanup)
+
+    def handle_connections_cleanup(self):
+        """Periodically calls the cleanup_connections method of the ConnectionManager instance to
+        clean up inactive connections. This method is not really running in a thread: Ryu just
+        add a special event to the event queue that triggers this method. We are thread-safe because
+        there is not really any concurrency...
+        """
+        self.logger.info(
+            "connections_cleanup: Global connections cleanup timer activated."
+        )
+        while True:
+            # Do stuff...
+            active_connections, inactive_connections = (
+                self._connection_manager.cleanup_connections()
+            )
+            self.logger.info(
+                "connections_cleanup: Found %d active communications. Removed %d "
+                " inactive/offloaded connections.",
+                active_connections,
+                inactive_connections,
+            )
+            # Take a nap...
+            hub.sleep(TCP_CONNECTION_TIMEOUT)
 
     # If needed, also EventSwitchEnter/EventSwitchLeave/EventSwitchReconnected could be used to
     # track a variation in the network topology. This is not done now because we assume that a
