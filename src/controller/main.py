@@ -498,6 +498,7 @@ class ConnectionManager:
             self.volume = 0
             self.accelerated_switches = set()
             self.counting_switch = None
+            self.is_active = True
 
     def __init__(self):
         """Initializes the ConnectionManager with an empty list of connections."""
@@ -795,6 +796,13 @@ class BabyElephantWalk(app_manager.RyuApp):
                     tcp_conn.port_b,
                 )
                 tcp_conn.counting_switch = switch.id
+
+            # In any case, we have a packet that belongs to a TCP connection. This means that the
+            # connection is active. Make sure to keep the flag is_active set to True.
+            tcp_conn.is_active = True
+            # N.B: A connection can be removed from ConnectionManager - due to packet not arriving
+            # to the controller - but still be active on the switches. This is intended: we have
+            # offloaded the connection to the dataplane and its not our job to track it anymore.
 
             # Update the volume of the connection.
             if tcp_conn.counting_switch == switch.id:
