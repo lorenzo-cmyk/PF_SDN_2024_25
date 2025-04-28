@@ -16,10 +16,12 @@ drastically reducing controller load and improving network performance.
 ## Execution
 
 The controller script is tailored to work inside the specific containerized environment provided for
-the course, [available here](https://github.com/gverticale/sdn-vm-polimi).
+the course [available here](https://github.com/gverticale/sdn-vm-polimi).
 
-This VM environment contains a container pre-configured with Python 3, the Ryu framework, NetworkX,
-and Mininet, which are necessary to run the project.
+This VM environment contains a container pre-configured with
+[Python 3.7](https://github.com/python/cpython), [Ryu Framework](https://github.com/faucetsdn/ryu),
+[NetworkX](https://github.com/networkx/networkx), and [Mininet](https://github.com/mininet/mininet),
+which are necessary to run the project.
 
 To start the application:
 
@@ -28,6 +30,16 @@ To start the application:
     application.
 3.  Use the `start_network.sh` script provided in this repository to initialize the Mininet network
     topology. The topology will automatically connect to the running Ryu controller.
+
+### Optional Requirements
+
+- [FlowManager](https://github.com/martimy/flowmanager): A standalone SDN application that provides
+  a nice WebUI to manage the switches connected to the controller. Is also userful to visualize
+  graphically the network topology and retrieve the traffic statistics.
+- [IPerf3](https://github.com/esnet/iperf): The container ships with IPerf2 installed, but IPerf3 is
+  better suited for this project thanks to its improved structured output and more detailed
+  statistics. Pre-built static binaries are
+  [available here](https://github.com/userdocs/iperf3-static/) for both ARM and x86 architectures.
 
 ## Authors
 
