@@ -25,21 +25,35 @@ which are necessary to run the project.
 
 To start the application:
 
-1.  Ensure you are running inside the provided Docker container.
-2.  Use the `start_controller.sh` script provided in this repository to launch the Ryu controller
-    application.
-3.  Use the `start_network.sh` script provided in this repository to initialize the Mininet network
-    topology. The topology will automatically connect to the running Ryu controller.
+1. Ensure you are running inside the provided Docker container.
+2. Use the `start_controller.sh` script provided in this repository to launch the Ryu controller
+   application.
+3. Use the `start_network.sh` script provided in this repository to initialize the Mininet network
+   topology. The topology will automatically connect to the running Ryu controller.
 
 ### Optional Requirements
 
 - [FlowManager](https://github.com/martimy/flowmanager): A standalone SDN application that provides
   a nice WebUI to manage the switches connected to the controller. Is also userful to visualize
   graphically the network topology and retrieve the traffic statistics.
-- [IPerf3](https://github.com/esnet/iperf): The container ships with IPerf2 installed, but IPerf3 is
+
+  - FlowManager is automatically started by the `start_controller.sh` script if found inside the
+    `src/tools/flowmanager` folder.
+
+- [iPerf3](https://github.com/esnet/iperf): The container ships with IPerf2 installed, but iPerf3 is
   better suited for this project thanks to its improved structured output and more detailed
   statistics. Pre-built static binaries are
   [available here](https://github.com/userdocs/iperf3-static/) for both ARM and x86 architectures.
+  - A Jupyter Notebook is provided in the `src/tools/iperf3` folder to automatically plot iPerf3
+    data. iPerf3 must be run with the `-J` option to generate JSON output, which the notebook can
+    then process.
+
+### Documentation
+
+The documentation is available in the `docs` folder. It contains:
+
+- Intermediate and final presentation slides and demo videos.
+- Notes on how to validate the project on the physical testbed.
 
 ## Authors
 
