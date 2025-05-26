@@ -4,7 +4,7 @@
 TCP_FORWARDING_RULE_PRIORITY = 100
 # Threshold for the TCP stream volume: if the volume is greater than this value, a rule will be
 # installed to forward the TCP stream directly bypassing the controller. Value is in bytes.
-TCP_STREAM_VOLUME_THRESHOLD = 25 * 1000 * 1000  # 25 MB
+TCP_STREAM_VOLUME_THRESHOLD = 360 * 1000 # 360 KB
 # Whether to enable the automatic connection cleanup mechanism. If set to True, the controller will
 # automatically remove TCP connections that are not active for a certain amount of time. The
 # controller will remove the connection from its own internal state; the switches themselves have
