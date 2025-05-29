@@ -1,5 +1,8 @@
 # BabyElephantWalk - Software Defined Networking Project (A.Y. 2024/2025)
 
+- Deadline: 2025-05-28
+- Grade: 30L/30
+
 ## Description
 
 This project implements a Ryu SDN controller that distinguishes between high-volume TCP connections
