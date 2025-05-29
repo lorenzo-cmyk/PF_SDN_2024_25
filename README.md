@@ -57,7 +57,7 @@ The documentation is available in the `docs` folder. It contains:
 
 ## Authors
 
-- Alessandro Modica
-- Lorenzo Chiroli
-- Letizia Carnevale Giampaolo
-- Ronald Cammaroto
+- [TheManchineel](https://github.com/TheManchineel)
+- [lorenzo-cmyk](https://github.com/lorenzo-cmyk)
+- [Leddy02](https://github.com/Leddy02)
+- [ronald892](https://github.com/ronald892)
